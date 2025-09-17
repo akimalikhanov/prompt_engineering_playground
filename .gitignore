@@ -1,0 +1,18 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+
+# Folders
+storage/llama3.1-8b-awq/
+
+# Mics
+.env
+=0.46.1

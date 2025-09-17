@@ -1,0 +1,67 @@
+# config/models.yaml
+# Purpose: single registry for router lookups (Stage 3)
+# - Maps a simple model_id (what your CLI uses) -> adapter module/function + model name/path
+# - Holds safe defaults (stream on, temp/top_p/max_tokens/seed)
+# - Includes local vLLM server info so you can remove config/vllm_map.json
+
+adapters:
+  openai:
+    module: adapters.openai_conn
+    function: openai_call
+  gemini:
+    module: adapters.gemini_conn
+    function: gemini_call
+  vllm:
+    module: adapters.vllm_conn
+    function: vllm_call
+
+defaults:
+  params:
+    temperature: 0.9
+    top_p: 1.0
+    max_tokens: 100
+    seed: null
+  stream: true
+
+models:
+  # === Cloud adapters ===
+  - id: gpt                   # matches your --model_id choices
+    label: "OpenAI GPT-4o-mini"
+    adapter: openai
+    model_name: "gpt-4o-mini"
+    capabilities:
+      streaming: true
+    params_override: {}       # keep empty to use defaults
+
+  - id: gemini
+    label: "Gemini 2.5 Flash Lite"
+    adapter: gemini
+    model_name: "gemini-2.5-flash-lite"
+    capabilities:
+      streaming: true
+    params_override: {}
+
+  # === Local vLLM adapters ===
+  - id: llama
+    label: "Llama (vLLM)"
+    adapter: vllm
+    model_path: "./storage/llama3.1-8b-awq"  # your local HF path or name
+    server:
+      host: "0.0.0.0"
+      port: 8002                                # was vllm_dict['llama']['port']
+      base_path: "/v1"                          # router will format http://host:port/base_path
+    capabilities:
+      streaming: true
+    params_override: {}
+
+  - id: qwen
+    label: "Qwen (vLLM)"
+    adapter: vllm
+    model_path: "Qwen/Qwen2.5-7B-Instruct-AWQ"  # your local HF path or name
+    server:
+      host: "0.0.0.0"
+      port: 8001                                # was vllm_dict['qwen']['port']
+      base_path: "/v1"
+    capabilities:
+      streaming: true
+    params_override: {}

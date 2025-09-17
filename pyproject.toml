@@ -1,0 +1,14 @@
+[project]
+name = "prompt-eng-playground"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "google-genai>=1.32.0",
+    "huggingface-hub[cli]>=0.34.4",
+    "openai>=1.102.0",
+    "python-dotenv>=1.1.1",
+]
+
+# vllm[torch-backend,auto]
