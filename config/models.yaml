@@ -61,7 +61,7 @@ models:
       streaming: true
     params_override: {}       # keep empty to use defaults
 
-  - id: gemini
+  - id: gemini-flash-lite
     label: "Gemini 2.5 Flash Lite"
     provider: google
     model_name: "gemini-2.5-flash-lite"
@@ -74,6 +74,34 @@ models:
     capabilities:
       streaming: true
     params_override: {}
+
+  - id: gemini-flash
+    label: "Gemini 2.5 flash"
+    provider: google
+    model_name: "gemini-2.5-flash"
+    pricing:
+      currency: USD
+      unit: per_1k_tokens
+      input: 0.0
+      output: 0.0
+      notes: "Free tier is used (daily rate limits are applied by Google)"
+    capabilities:
+      streaming: true
+    params_override: {max_tokens: 2000}
+
+  - id: gemini-pro
+    label: "Gemini 2.5 Pro"
+    provider: google
+    model_name: "gemini-2.5-pro"
+    pricing:
+      currency: USD
+      unit: per_1k_tokens
+      input: 0.0
+      output: 0.0
+      notes: "Free tier is used (daily rate limits are applied by Google)"
+    capabilities:
+      streaming: true
+    params_override: {max_tokens: 2000}
 
   # === Local vLLM adapters ===
   - id: llama

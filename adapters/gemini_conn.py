@@ -80,7 +80,7 @@ def _handle_gemini_error(error):
         if "quota" in error_str.lower():
             return Exception(
                 "🚫 Rate limit exceeded: You've hit your Gemini API quota limit. "
-                "The free tier allows 15 requests per minute. "
+                "The free tier allows 10/15 requests per minute (for Flash and Flash Lite). "
                 "Please wait a minute before trying again, or consider upgrading your plan."
             )
         else:
