@@ -8,7 +8,7 @@ adapters:
   openai:
     module: adapters.openai_conn
     function: openai_call
-  gemini:
+  google:
     module: adapters.gemini_conn
     function: gemini_call
   vllm:
@@ -26,17 +26,51 @@ defaults:
 models:
   # === Cloud adapters ===
   - id: gpt                   # matches your --model_id choices
+    label: "OpenAI GPT-4o"
+    provider: openai
+    model_name: "gpt-4o"
+    pricing:
+      currency: USD
+      unit: per_1k_tokens
+      input: 0.00250           # $/1,000 input tokens for GPT-4o
+      output: 0.01000          # $/1,000 output tokens
+      cached_input: null
+      cached_output: null
+      rounding: exact
+      effective: 2025-05-13    # date when full GPT-4o API price was announced (approx) :contentReference[oaicite:3]{index=3}
+      notes: "OpenAI list price for full GPT-4o: $2.50 per 1M input, $10.00 per 1M output tokens"
+    capabilities:
+      streaming: true
+    params_override: {}       # keep empty to use defaults
+
+  - id: gpt-mini              # matches your --model_id choices
     label: "OpenAI GPT-4o-mini"
-    adapter: openai
+    provider: openai
     model_name: "gpt-4o-mini"
+    pricing:
+      currency: USD
+      unit: per_1k_tokens
+      input: 0.00015              # $/1,000 input tokens for GPT-4o-mini
+      output: 0.00060             # $/1,000 output tokens
+      cached_input: null          # set if OpenAI exposes cheaper cached input
+      cached_output: null         # likewise
+      rounding: exact             # you can choose ceil_1k / nearest_1k / exact
+      effective: 2025-07-18       # date of pricing announcement
+      notes: "OpenAI list price: $0.15 per 1M input tokens, $0.60 per 1M output tokens"
     capabilities:
       streaming: true
     params_override: {}       # keep empty to use defaults
 
   - id: gemini
     label: "Gemini 2.5 Flash Lite"
-    adapter: gemini
+    provider: google
     model_name: "gemini-2.5-flash-lite"
+    pricing:
+      currency: USD
+      unit: per_1k_tokens
+      input: 0.0
+      output: 0.0
+      notes: "Free tier is used (daily rate limits are applied by Google)"
     capabilities:
       streaming: true
     params_override: {}
@@ -44,24 +78,34 @@ models:
   # === Local vLLM adapters ===
   - id: llama
     label: "Llama (vLLM)"
-    adapter: vllm
+    provider: vllm
     model_path: "./storage/llama3.1-8b-awq"  # your local HF path or name
     server:
       host: "0.0.0.0"
       port: 8002                                # was vllm_dict['llama']['port']
       base_path: "/v1"                          # router will format http://host:port/base_path
+    pricing:
+      currency: USD
+      unit: local            # indicates no per-token pricing
+      cost: 0.0              # treated as free in cost dashboards
+      notes: "Running on self-hosted GPU with vLLM. No API billing."
     capabilities:
       streaming: true
     params_override: {}
 
   - id: qwen
     label: "Qwen (vLLM)"
-    adapter: vllm
+    provider: vllm
     model_path: "Qwen/Qwen2.5-7B-Instruct-AWQ"  # your local HF path or name
     server:
       host: "0.0.0.0"
       port: 8001                                # was vllm_dict['qwen']['port']
       base_path: "/v1"
+    pricing:
+      currency: USD
+      unit: local            # indicates no per-token pricing
+      cost: 0.0              # treated as free in cost dashboards
+      notes: "Running on self-hosted GPU with vLLM. No API billing."
     capabilities:
       streaming: true
     params_override: {}
