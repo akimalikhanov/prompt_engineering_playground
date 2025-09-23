@@ -2,18 +2,18 @@
 # Purpose: single registry for router lookups (Stage 3)
 # - Maps a simple model_id (what your CLI uses) -> adapter module/function + model name/path
 # - Holds safe defaults (stream on, temp/top_p/max_tokens/seed)
-# - Includes local vLLM server info so you can remove config/vllm_map.json
+# - Includes local vLLM server info
 
-adapters:
+providers:
   openai:
-    module: adapters.openai_conn
-    function: openai_call
+    base_url: "https://api.openai.com/v1/"
+    api_key_env: "OPENAI_API_KEY"
   google:
-    module: adapters.gemini_conn
-    function: gemini_call
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+    api_key_env: "GOOGLE_API_KEY"
   vllm:
-    module: adapters.vllm_conn
-    function: vllm_call
+    # base_url is per-model using the server config in each model
+    api_key_env: null   # not required; a dummy key will be used
 
 defaults:
   params:
@@ -89,19 +89,19 @@ models:
       streaming: true
     params_override: {max_tokens: 2000}
 
-  - id: gemini-pro
-    label: "Gemini 2.5 Pro"
-    provider: google
-    model_name: "gemini-2.5-pro"
-    pricing:
-      currency: USD
-      unit: per_1k_tokens
-      input: 0.0
-      output: 0.0
-      notes: "Free tier is used (daily rate limits are applied by Google)"
-    capabilities:
-      streaming: true
-    params_override: {max_tokens: 2000}
+  # - id: gemini-pro
+  #   label: "Gemini 2.5 Pro"
+  #   provider: google
+  #   model_name: "gemini-2.5-pro"
+  #   pricing:
+  #     currency: USD
+  #     unit: per_1k_tokens
+  #     input: 0.0
+  #     output: 0.0
+  #     notes: "Free tier is used (daily rate limits are applied by Google)"
+  #   capabilities:
+  #     streaming: true
+  #   params_override: {max_tokens: 2000}
 
   # === Local vLLM adapters ===
   - id: llama

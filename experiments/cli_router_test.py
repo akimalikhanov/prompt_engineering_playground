@@ -1,12 +1,26 @@
 #!/usr/bin/env python3
 """
-CLI script to test the router service.
-Usage: python cli_router_test.py --provider openai --model gpt --message "Hello, world!"
+CLI script to test the universal router (via openai_adapter).
+
+Examples:
+  - OpenAI (string):
+      python experiments/cli_router_test.py --provider openai --model gpt --message "Hello, world!"
+
+  - Google Gemini (string):
+      python experiments/cli_router_test.py --provider google --model gemini-flash --message "Ping"
+
+  - vLLM local (string):
+      python experiments/cli_router_test.py --provider vllm --model llama --message "Hi"
+
+  - Chat history (list of dicts):
+      python experiments/cli_router_test.py --provider openai --model gpt \
+        --message "[{\"role\":\"system\",\"content\":\"You are helpful\"},{\"role\":\"user\",\"content\":\"Hi\"}]"
 """
 
 import argparse
 import os
 from services.router import route_call, get_available_models, get_available_providers
+import ast
 
 def str2bool(v):
     """Convert string to boolean for argparse."""
@@ -29,7 +43,16 @@ def main():
                        help=f"Provider ID. Available: {available_providers}")
     parser.add_argument("--model", choices=available_models, required=True,
                        help=f"Model ID. Available: {available_models}")
-    parser.add_argument("--message", type=str, required=True, help="Message to send")
+    def parse_message(value: str):
+        """Accept a plain string or a Python literal list/dict for chat history."""
+        try:
+            parsed = ast.literal_eval(value)
+            return parsed
+        except Exception:
+            return value
+
+    parser.add_argument("--message", type=parse_message, required=True,
+                       help="Message to send. Can be a string or Python list of messages.")
     parser.add_argument("--stream", type=str2bool, nargs="?", const=True, default=True,
                        help="Enable streaming (default: True)")
     parser.add_argument("--temperature", type=float, default=0.9, help="Temperature (default: 0.9)")
@@ -47,7 +70,7 @@ def main():
         "seed": args.seed,
     }
     
-    print(f"Calling {args.provider}/{args.model} with message: '{args.message}'")
+    print(f"Calling {args.provider}/{args.model} with message: {args.message}")
     print(f"Parameters: {params}")
     print(f"Streaming: {args.stream}")
     print("-" * 50)
@@ -74,7 +97,8 @@ def main():
             print(response)
             
     except Exception as e:
-        print(f"Error: {e}")
+        # print(f"Error: {e}")
+        print(e)
         return 1
     
     return 0

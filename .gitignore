@@ -9,10 +9,12 @@ wheels/
 # Virtual environments
 .venv
 
-
 # Folders
 storage/llama3.1-8b-awq/
 
 # Mics
 .env
 =0.46.1
+
+openai_api_test.py
+adapter_test.py

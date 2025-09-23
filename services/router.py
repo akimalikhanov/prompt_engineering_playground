@@ -2,9 +2,7 @@ import os
 import yaml
 from dotenv import load_dotenv
 from types import GeneratorType
-from adapters.openai_conn import openai_call
-from adapters.gemini_conn import gemini_call
-from adapters.vllm_conn import vllm_call
+from adapters.openai_adapter import _unified_openai_api_call, prettify_openai_error
 
 # Load environment variables
 load_dotenv()
@@ -63,49 +61,43 @@ def route_call(provider_id, model_id, messages, params, stream=True):
     if 'params_override' in model_config:
         merged_params.update(model_config['params_override'])
     
-    # Route to appropriate adapter based on provider_id
-    if provider_id == 'openai':
-        api_key = os.getenv('OPENAI_API_KEY')
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY environment variable not set")
-        
-        return openai_call(
-            model=model_config['model_name'],
-            messages=messages,
-            params=merged_params,
-            stream=stream,
-            api_key=api_key
-        )
-    
-    elif provider_id == 'google':
-        api_key = os.getenv('GOOGLE_API_KEY')
-        if not api_key:
-            raise ValueError("GOOGLE_API_KEY environment variable not set")
-        
-        return gemini_call(
-            model=model_config['model_name'],
-            messages=messages,
-            params=merged_params,
-            stream=stream,
-            api_key=api_key
-        )
-    
-    elif provider_id == 'vllm':
-        # Build base URL for vLLM server
+    # Resolve base_url and api_key per provider and forward through openai_adapter
+    providers = _models_config['providers']
+    if provider_id not in providers:
+        available_providers = list(providers.keys())
+        raise ValueError(f"Provider ID '{provider_id}' not supported. Available providers: {available_providers}")
+
+    provider_cfg = providers[provider_id]
+
+    # Determine base_url and model
+    if provider_id == 'vllm':
         server_config = model_config['server']
         base_url = f"http://{server_config['host']}:{server_config['port']}{server_config['base_path']}"
-        
-        return vllm_call(
-            model=model_config['model_path'],
-            messages=messages,
+        model_name = model_config['model_path']
+        api_key = "dummy"
+    else:
+        base_url = provider_cfg['base_url']
+        model_name = model_config['model_name']
+        api_key_env = provider_cfg.get('api_key_env')
+        api_key = os.getenv(api_key_env) if api_key_env else None
+        if not api_key:
+            raise ValueError(f"{api_key_env} environment variable not set")
+
+    # Normalize messages: accept str or pre-built list
+    normalized_messages = (
+        [{"role": "user", "content": messages}] if isinstance(messages, str) else messages
+    )
+    try:
+        return _unified_openai_api_call(
+            model=model_name,
+            messages=normalized_messages,
             params=merged_params,
             stream=stream,
-            base_url=base_url
+            api_key=api_key,
+            base_url=base_url,
         )
-    
-    else:
-        available_providers = list(_models_config['adapters'].keys())
-        raise ValueError(f"Provider ID '{provider_id}' not supported. Available providers: {available_providers}")
+    except Exception as e:
+        raise Exception(prettify_openai_error(e))
 
 
 def get_available_models():
@@ -125,7 +117,7 @@ def get_available_providers():
     Returns:
         dict: Dictionary mapping provider_id to provider configuration
     """
-    return _models_config['adapters'].copy()
+    return _models_config['providers'].copy()
 
 
 def get_default_params():
