@@ -1,23 +1,12 @@
 import os
-import yaml
 from dotenv import load_dotenv
 from types import GeneratorType
 from adapters.openai_adapter import _unified_openai_api_call, prettify_openai_error
+from services.errors import BackendError
+from config.load_models_config import _load_models_config
 
 # Load environment variables
 load_dotenv()
-
-# Load model configurations from YAML file
-def _load_models_config():
-    """Load and validate models configuration from YAML file."""
-    try:
-        with open('config/models.yaml', 'r') as f:
-            models_config = yaml.safe_load(f)
-        return models_config
-    except FileNotFoundError:
-        raise FileNotFoundError("Error: models.yaml not found in config/ directory")
-    except yaml.YAMLError as e:
-        raise yaml.YAMLError(f"Error: Invalid YAML format in models.yaml: {e}")
 
 # Load configuration once at module level
 _models_config = _load_models_config()
@@ -97,7 +86,10 @@ def route_call(provider_id, model_id, messages, params, stream=True):
             base_url=base_url,
         )
     except Exception as e:
-        raise Exception(prettify_openai_error(e))
+        msg = prettify_openai_error(e)
+        status = getattr(e, "status_code", None)
+        status_code = status if isinstance(status, int) and 400 <= status < 500 else 502
+        raise BackendError(msg, status_code)
 
 
 def get_available_models():

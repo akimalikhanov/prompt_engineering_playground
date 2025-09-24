@@ -76,7 +76,7 @@ models:
     params_override: {}
 
   - id: gemini-flash
-    label: "Gemini 2.5 flash"
+    label: "Gemini 2.5 Flash"
     provider: google
     model_name: "gemini-2.5-flash"
     pricing:
@@ -105,7 +105,7 @@ models:
 
   # === Local vLLM adapters ===
   - id: llama
-    label: "Llama (vLLM)"
+    label: "Llama3.1-8B-Instruct-AWQ (vLLM)"
     provider: vllm
     model_path: "./storage/llama3.1-8b-awq"  # your local HF path or name
     server:
@@ -122,7 +122,7 @@ models:
     params_override: {}
 
   - id: qwen
-    label: "Qwen (vLLM)"
+    label: "Qwen2.5-7B-Instruct-AWQ (vLLM)"
     provider: vllm
     model_path: "Qwen/Qwen2.5-7B-Instruct-AWQ"  # your local HF path or name
     server:
