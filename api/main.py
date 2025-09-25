@@ -63,6 +63,7 @@ def chat_stream(body: ChatRequest):
         messages=[m.model_dump() for m in body.messages] if isinstance(body.messages, list) else body.messages,
         params=body.params.model_dump(),
         stream=True,
+        stream_mode="raw"
     )
 
     return StreamingResponse(gen, media_type="text/plain")
@@ -77,36 +78,17 @@ def chat_stream_sse(body: ChatRequest):
         messages=[m.model_dump() for m in body.messages] if isinstance(body.messages, list) else body.messages,
         params=body.params.model_dump(),
         stream=True,
+        stream_mode="sse",              # emits already-framed SSE bytes
     )
-
-    def stream() -> Generator[bytes, None, None]:
-        try:
-            # Optional: first event to signal start
-            # yield sse_pack("started", event="status")
-
-            # Forward model chunks as SSE `message` events
-            for chunk in gen:
-                if not chunk:
-                    continue
-                # yield chunk
-                yield sse_pack(chunk, event="message")
-
-            # Optional: final event
-            yield sse_pack("done", event="status")
-        except Exception as e:
-            # Send a structured SSE error event
-            yield sse_pack(str(e), event="error")
-
-        # Optional: graceful close message id/event if your client tracks ids
-        # yield sse_pack("end", event="close", id="final")
-
-    headers = {
-        "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
-        # CORS as needed:
-        # "Access-Control-Allow-Origin": "*",
-    }
-    return StreamingResponse(stream(), media_type="text/event-stream", headers=headers)
+    return StreamingResponse(
+        gen,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 # ==========================================================================
 # ==========================================================================
 

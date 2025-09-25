@@ -12,7 +12,7 @@ load_dotenv()
 _models_config = _load_models_config()
 _models_lookup = {model['id']: model for model in _models_config['models']}
 
-def route_call(provider_id, model_id, messages, params, stream=True):
+def route_call(provider_id, model_id, messages, params, stream=True, stream_mode="sse"):
     """
     Route API calls to the appropriate adapter based on provider and model.
     
@@ -84,6 +84,7 @@ def route_call(provider_id, model_id, messages, params, stream=True):
             stream=stream,
             api_key=api_key,
             base_url=base_url,
+            stream_mode=stream_mode
         )
     except Exception as e:
         msg = prettify_openai_error(e)

@@ -1,12 +1,20 @@
-import json
+import os, time, json
+from typing import Generator, Optional, Literal
 import openai
+from utils.sse import sse_pack
+
 
 def _unified_openai_api_call(model: str,
                messages,
                params: dict,
                stream: bool,
                api_key: str,
-               base_url: str):
+               base_url: str,
+               stream_mode: Literal["raw","sse"]="raw",
+               sse_event: str = "message",
+               send_done: bool = False,              # optional status event
+               include_metrics: bool = True          # <— add a final metrics event
+               ):
     """
     Chat completion via OpenAI-compatible API.
 
@@ -20,6 +28,10 @@ def _unified_openai_api_call(model: str,
         stream (bool): If True, returns streaming response generator
         api_key (str): API key
         base_url (str|None): Optional OpenAI-compatible base URL
+        stream_mode: Stream in as SSE or plain text
+        - 'raw' -> yields str chunks
+        - 'sse' -> yields SSE bytes (text/event-stream ready), ends with metrics
+        include_metrics: add TTFT and latency to SSE response
 
     Returns:
         If stream=True: Generator yielding streaming text chunks
@@ -28,8 +40,8 @@ def _unified_openai_api_call(model: str,
     client = openai.OpenAI(api_key=api_key, base_url=base_url)
 
     normalized_messages = (
-    [{"role": "user", "content": messages}] if isinstance(messages, str) else messages)
-
+        [{"role": "user", "content": messages}] if isinstance(messages, str) else messages
+    )
     kwargs = {
         "model": model,
         "messages": normalized_messages,
@@ -39,20 +51,69 @@ def _unified_openai_api_call(model: str,
         "seed": params.get("seed"),
         "stream": stream,
     }
+    if "gemini" in model:
+        kwargs.pop("seed", None)
 
-    if 'gemini' in model:
-        kwargs.pop('seed')
-
+    t0 = time.perf_counter()
     res = client.chat.completions.create(**kwargs)
 
-    if stream:
-        def _streamer():
-            for chunk in res:
-                yield chunk.choices[0].delta.content or ""
-        return _streamer()
+    def _iter_text(chunks):
+        for ch in chunks:
+            delta = ch.choices[0].delta
+            piece = getattr(delta, "content", None)
+            if piece:
+                yield piece
 
+    if stream:
+        if stream_mode == "raw":
+            # raw text stream with metrics appended as a final JSON line (optional)
+            def _iter_raw() -> Generator[str, None, None]:
+                ttft = None
+                chunk_count = 0
+                for piece in _iter_text(res):
+                    if ttft is None:
+                        ttft = time.perf_counter() - t0
+                    chunk_count += 1
+                    yield piece
+                total = time.perf_counter() - t0
+                if include_metrics:
+                    # emit a newline + JSON metrics so curl can capture it
+                    metrics = {
+                        "metrics": {
+                            "ttft_ms": round(ttft * 1000, 1) if ttft is not None else None,
+                            "total_ms": round(total * 1000, 1),
+                            "chunks": chunk_count,
+                            "model": model,
+                        }
+                    }
+                    yield "\n" + json.dumps(metrics) + "\n"
+            return _iter_raw()
+
+        # SSE mode with a final `event: metrics`
+        def _iter_sse() -> Generator[bytes, None, None]:
+            ttft = None
+            chunk_count = 0
+            for piece in _iter_text(res):
+                if ttft is None:
+                    ttft = time.perf_counter() - t0
+                chunk_count += 1
+                yield sse_pack(piece, event=sse_event)
+            total = time.perf_counter() - t0
+            if send_done:
+                yield sse_pack("done", event="status")
+            if include_metrics:
+                payload = {
+                    "ttft_ms": round(ttft * 1000, 1) if ttft is not None else None,
+                    "total_ms": round(total * 1000, 1),
+                    "chunks": chunk_count,
+                    "model": model,
+                }
+                yield sse_pack(json.dumps(payload), event="metrics")  # <— final metrics event
+        return _iter_sse()
+
+    # non-streaming
     msg = res.choices[0].message
-    return msg.content or ""     
+    return msg.content or ""   
 
 
 
