@@ -52,7 +52,7 @@ def _unified_openai_api_call(model: str,
         return _streamer()
 
     msg = res.choices[0].message
-    return msg.content or ""
+    return msg.content or ""     
 
 
 

@@ -1,7 +1,8 @@
 from fastapi import FastAPI, HTTPException, Query, Response, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from typing import Generator
-from services.errors import BackendError
+from utils.errors import BackendError
+from utils.sse import sse_pack
 from config.load_models_config import _load_models_config
 from schemas.schemas import *
 from services.router import route_call
@@ -64,18 +65,50 @@ def chat_stream(body: ChatRequest):
         stream=True,
     )
 
-    def inline_wrap() -> Generator[bytes, None, None]:
+    return StreamingResponse(gen, media_type="text/plain")
+
+# ==========================================================================
+# ==========================================================================
+@app.post("/chat.streamsse", response_class=StreamingResponse)
+def chat_stream_sse(body: ChatRequest):
+    gen = route_call(
+        provider_id=body.provider_id,
+        model_id=body.model_id,
+        messages=[m.model_dump() for m in body.messages] if isinstance(body.messages, list) else body.messages,
+        params=body.params.model_dump(),
+        stream=True,
+    )
+
+    def stream() -> Generator[bytes, None, None]:
         try:
+            # Optional: first event to signal start
+            # yield sse_pack("started", event="status")
+
+            # Forward model chunks as SSE `message` events
             for chunk in gen:
                 if not chunk:
                     continue
-                # Stream raw chunk bytes; clients should render as a running line
-                yield chunk.encode("utf-8")
+                # yield chunk
+                yield sse_pack(chunk, event="message")
+
+            # Optional: final event
+            yield sse_pack("done", event="status")
         except Exception as e:
-            yield f"[error] {str(e)}\n".encode("utf-8")
+            # Send a structured SSE error event
+            yield sse_pack(str(e), event="error")
 
-    return StreamingResponse(inline_wrap(), media_type="text/plain")
+        # Optional: graceful close message id/event if your client tracks ids
+        # yield sse_pack("end", event="close", id="final")
 
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        # CORS as needed:
+        # "Access-Control-Allow-Origin": "*",
+    }
+    return StreamingResponse(stream(), media_type="text/event-stream", headers=headers)
+# ==========================================================================
+# ==========================================================================
 
 @app.exception_handler(BackendError)
 def handle_backend_error(request: Request, exc: BackendError):

@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 from types import GeneratorType
 from adapters.openai_adapter import _unified_openai_api_call, prettify_openai_error
-from services.errors import BackendError
+from utils.errors import BackendError
 from config.load_models_config import _load_models_config
 
 # Load environment variables
