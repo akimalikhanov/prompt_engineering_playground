@@ -57,8 +57,18 @@ class ChatRequest(BaseModel):
             return v
         raise ValueError("messages must be a string or a list of ChatMessage")
 
+class Usage(BaseModel):
+    prompt_tokens: Annotated[int, Field(ge=0)]
+    completion_tokens: Annotated[int, Field(ge=0)]
+    total_tokens: Annotated[int, Field(ge=0)]
+
+class Metrics(BaseModel):
+    ttft_ms: Optional[float] = None
+    latency_ms: Annotated[float, Field(ge=0)]
+    model: Annotated[str, Field(min_length=1, max_length=100)]
+
 class ChatResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    content: Annotated[str, Field(min_length=0, max_length=7000)]
-    model_id: Annotated[str, Field(min_length=1, max_length=100)]
-    provider_id: Annotated[str, Field(min_length=1, max_length=100)]
+    text: Annotated[str, Field(min_length=0, max_length=7000)]
+    usage: Usage
+    metrics: Metrics

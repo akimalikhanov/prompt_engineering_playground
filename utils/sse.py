@@ -18,7 +18,7 @@ def sse_pack(data: str, *, event: Optional[str] = None,
     if id is not None:
         lines.append(f"id: {id}")
     if event is not None:
-        lines.append(f"event:{ event}")
+        lines.append(f"event: {event}")
     if retry is not None:
         lines.append(f"retry: {retry}")
     for line in data.splitlines() or [""]:

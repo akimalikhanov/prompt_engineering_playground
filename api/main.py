@@ -32,7 +32,7 @@ def list_models() -> ModelsResponse:
     response_model=ChatResponse,
     responses={200: {"description": "Complete response as JSON"}},
 )
-def chat(body: ChatRequest) -> ChatResponse:
+def chat(body: ChatRequest):
     result = route_call(
         provider_id=body.provider_id,
         model_id=body.model_id,
@@ -40,12 +40,15 @@ def chat(body: ChatRequest) -> ChatResponse:
         params=body.params.model_dump(),
         stream=False,
     )
-    return ChatResponse(
-        content=result,
-        model_id=body.model_id,
-        provider_id=body.provider_id,
-    )
 
+    final_res = {
+            "text": result["text"],
+            "usage": result.get("usage", { "prompt_tokens": 0, "completion_tokens": 0, 'total_tokens': 0}),
+            "metrics": result.get("metrics", {"ttft_ms": None, "latency_ms": 0.0, "model": body.model_id}),
+        }
+
+    return ChatResponse.model_validate(final_res)
+    
 @app.post(
     "/chat.stream",
     response_model=None,  # streaming is not a Pydantic field
