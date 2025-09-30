@@ -1,18 +1,20 @@
 import os
 from dotenv import load_dotenv
-from types import GeneratorType
 from adapters.openai_adapter import _unified_openai_api_call
 from utils.errors import (_get_status_code, \
-                    is_transient_error, \
                     prettify_openai_error, \
-                    _get_retry_after_seconds, \
-                    compute_backoff_seconds, \
                     BackendError)
+from utils.retry import call_with_retry
 from config.load_models_config import _load_models_config
 import time
 import logging
-import uuid
-from typing import Callable, Optional
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s"
+)
+
 logger = logging.getLogger("unified_openai")
 logger.setLevel(logging.INFO)
 # Load environment variables
@@ -21,55 +23,6 @@ load_dotenv()
 # Load configuration once at module level
 _models_config = _load_models_config()
 _models_lookup = {model['id']: model for model in _models_config['models']}
-
-def call_with_retry(
-    fn: Callable[[], any],
-    *,
-    max_retries: int = 3,
-    base_delay: float = 0.5,
-    max_delay: float = 8.0,
-    jitter_max: float = 0.5,
-    logger: Optional[logging.Logger] = None,
-    corr_id: Optional[str] = None,
-):
-    """
-    Wrap a call with transient-error retries. Returns fn() result or raises the original error.
-    """
-    corr_id = corr_id or str(uuid.uuid4())
-    log = logger or logging.getLogger("retry")
-    attempt = 1
-    while True:
-        try:
-            result = fn()
-            # Successful call
-            log.debug(f"[corr_id={corr_id}] Success on attempt {attempt}")
-            return result
-        except Exception as err:
-            status_code = _get_status_code(err)
-            transient = is_transient_error(err)
-            pretty = prettify_openai_error(err)
-
-            log.warning(
-                f"[corr_id={corr_id}] API call failed (attempt {attempt}) "
-                f"status={status_code} transient={transient} msg={pretty}"
-            )
-
-            if not transient or attempt > max_retries:
-                # Give up
-                raise
-
-            # Compute delay (respect Retry-After)
-            retry_after = _get_retry_after_seconds(err)
-            sleep_s = compute_backoff_seconds(
-                attempt=attempt,
-                base_delay=base_delay,
-                max_delay=max_delay,
-                jitter_max=jitter_max,
-                server_retry_after=retry_after,
-            )
-            log.info(f"[corr_id={corr_id}] Retrying in {sleep_s:.2f}s ...")
-            time.sleep(sleep_s)
-            attempt += 1
 
 
 def route_call(provider_id, model_id, messages, params, stream=True, stream_mode="sse", max_retries=3):

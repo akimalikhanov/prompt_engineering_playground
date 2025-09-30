@@ -74,21 +74,6 @@ def is_transient_error(err: Exception) -> bool:
     sc = _get_status_code(err)
     return sc in TRANSIENT_STATUS_CODES
 
-def compute_backoff_seconds(
-    attempt: int,
-    base_delay: float = 0.5,
-    max_delay: float = 8.0,
-    jitter_max: float = 0.5,
-    server_retry_after: Optional[float] = None,
-) -> float:
-    """Exponential backoff with jitter; respects Retry-After if larger."""
-    backoff = min(base_delay * (2 ** (attempt - 1)), max_delay)
-    jitter = random.uniform(0.0, jitter_max) if jitter_max > 0 else 0.0
-    delay = backoff + jitter
-    if server_retry_after:
-        delay = max(delay, float(server_retry_after))
-    return delay
-
 def prettify_openai_error(err: Exception) -> str:
     """
     Convert OpenAI (or OpenAI-compatible) exceptions into human-readable messages.
