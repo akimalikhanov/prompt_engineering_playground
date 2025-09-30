@@ -10,13 +10,7 @@ import time
 import logging
 
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s"
-)
-
-logger = logging.getLogger("unified_openai")
-logger.setLevel(logging.INFO)
+logger = logging.getLogger(os.getenv("LOGGER_NAME", "llm-router"))
 # Load environment variables
 load_dotenv()
 

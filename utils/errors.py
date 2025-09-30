@@ -1,6 +1,5 @@
 import openai
 from typing import Optional
-import random
 
 class BackendError(Exception):
     def __init__(self, message: str, status_code: int = 400):

@@ -21,3 +21,5 @@ openai_api_test.py
 adapter_test.py
 openai_usage_stat_test.py
 test_prompts.py
+logs/
+test_prompts.txt

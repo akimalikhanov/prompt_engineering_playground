@@ -6,11 +6,25 @@ from utils.sse import sse_pack
 from config.load_models_config import _load_models_config
 from schemas.schemas import *
 from services.router import route_call
+from utils.logging import setup_logging, correlation_id_middleware
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 _models_config = _load_models_config()
 _models_list = [model['label'] for model in _models_config['models']]
 
 app = FastAPI(title="Prompt Engineering Playground")
+
+logger = setup_logging(
+    app_logger_name=os.getenv("LOGGER_NAME", "llm-router"),
+    level=20,                 # logging.INFO
+    to_console=True,
+    to_file=True,
+    file_path="logs/app.log", # stored locally in ./logs
+    hijack_uvicorn=True,      # <- key to avoid duplicate uvicorn+app logs
+)
 
 # -------------------------
 # Endpoints

@@ -14,7 +14,8 @@ def _unified_openai_api_call(
     stream_mode: Literal["raw","sse"]="raw",
     sse_event: str = "message",
     send_done: bool = False,               # optional status event
-    include_metrics: bool = True           # add TTFT and latency to final event
+    include_metrics: bool = True,           # add TTFT and latency to final event
+    max_retries: int = 0
 ):
     """
     Chat completion via OpenAI-compatible API (OpenAI, vLLM, etc).
@@ -58,7 +59,7 @@ def _unified_openai_api_call(
         If stream=False: Dict containing response text, usage, and metrics
     """
 
-    client = openai.OpenAI(api_key=api_key, base_url=base_url)
+    client = openai.OpenAI(api_key=api_key, base_url=base_url, max_retries=max_retries)
 
     normalized_messages = (
         [{"role": "user", "content": messages}] if isinstance(messages, str) else messages
