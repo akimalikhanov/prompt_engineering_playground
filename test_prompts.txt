@@ -1,0 +1,23 @@
+{
+  "provider_id": "google",
+  "model_id": "gemini-flash-lite",
+  "messages": "Hi",
+  "params": {
+    "temperature": 0.7,
+    "top_p": 1,
+    "max_tokens": 512
+  }
+}
+
+{
+  "provider_id": "vllm",
+  "model_id": "qwen",
+  "messages": "Explain in detail, is 'Skynet-like apocalypse' is realistic with current LLMs?",
+  "params": {
+    "temperature": 0.7,
+    "top_p": 1,
+    "max_tokens": 2000
+  }
+}
+
+

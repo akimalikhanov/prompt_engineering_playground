@@ -1,10 +1,20 @@
 import os
 from dotenv import load_dotenv
 from types import GeneratorType
-from adapters.openai_adapter import _unified_openai_api_call, prettify_openai_error
-from utils.errors import BackendError
+from adapters.openai_adapter import _unified_openai_api_call
+from utils.errors import (_get_status_code, \
+                    is_transient_error, \
+                    prettify_openai_error, \
+                    _get_retry_after_seconds, \
+                    compute_backoff_seconds, \
+                    BackendError)
 from config.load_models_config import _load_models_config
-
+import time
+import logging
+import uuid
+from typing import Callable, Optional
+logger = logging.getLogger("unified_openai")
+logger.setLevel(logging.INFO)
 # Load environment variables
 load_dotenv()
 
@@ -12,7 +22,57 @@ load_dotenv()
 _models_config = _load_models_config()
 _models_lookup = {model['id']: model for model in _models_config['models']}
 
-def route_call(provider_id, model_id, messages, params, stream=True, stream_mode="sse"):
+def call_with_retry(
+    fn: Callable[[], any],
+    *,
+    max_retries: int = 3,
+    base_delay: float = 0.5,
+    max_delay: float = 8.0,
+    jitter_max: float = 0.5,
+    logger: Optional[logging.Logger] = None,
+    corr_id: Optional[str] = None,
+):
+    """
+    Wrap a call with transient-error retries. Returns fn() result or raises the original error.
+    """
+    corr_id = corr_id or str(uuid.uuid4())
+    log = logger or logging.getLogger("retry")
+    attempt = 1
+    while True:
+        try:
+            result = fn()
+            # Successful call
+            log.debug(f"[corr_id={corr_id}] Success on attempt {attempt}")
+            return result
+        except Exception as err:
+            status_code = _get_status_code(err)
+            transient = is_transient_error(err)
+            pretty = prettify_openai_error(err)
+
+            log.warning(
+                f"[corr_id={corr_id}] API call failed (attempt {attempt}) "
+                f"status={status_code} transient={transient} msg={pretty}"
+            )
+
+            if not transient or attempt > max_retries:
+                # Give up
+                raise
+
+            # Compute delay (respect Retry-After)
+            retry_after = _get_retry_after_seconds(err)
+            sleep_s = compute_backoff_seconds(
+                attempt=attempt,
+                base_delay=base_delay,
+                max_delay=max_delay,
+                jitter_max=jitter_max,
+                server_retry_after=retry_after,
+            )
+            log.info(f"[corr_id={corr_id}] Retrying in {sleep_s:.2f}s ...")
+            time.sleep(sleep_s)
+            attempt += 1
+
+
+def route_call(provider_id, model_id, messages, params, stream=True, stream_mode="sse", max_retries=3):
     """
     Route API calls to the appropriate adapter based on provider and model.
     
@@ -77,18 +137,27 @@ def route_call(provider_id, model_id, messages, params, stream=True, stream_mode
         [{"role": "user", "content": messages}] if isinstance(messages, str) else messages
     )
     try:
-        return _unified_openai_api_call(
-            model=model_name,
-            messages=normalized_messages,
-            params=merged_params,
-            stream=stream,
-            api_key=api_key,
-            base_url=base_url,
-            stream_mode=stream_mode
+        return call_with_retry(
+            lambda: _unified_openai_api_call(
+                model=model_name,
+                messages=normalized_messages,
+                params=merged_params,
+                stream=stream,
+                api_key=api_key,
+                base_url=base_url,
+                stream_mode=stream_mode,
+            ),
+            max_retries=max_retries,
+            base_delay=0.5,
+            max_delay=8.0,
+            jitter_max=0.5,
+            logger=logger,
+            # corr_id is auto-generated; optionally pass one from your request context
         )
     except Exception as e:
         msg = prettify_openai_error(e)
-        status = getattr(e, "status_code", None)
+        status = _get_status_code(e)
+        # Preserve your rule: 4xx → pass through; else 502
         status_code = status if isinstance(status, int) and 400 <= status < 500 else 502
         raise BackendError(msg, status_code)
 
