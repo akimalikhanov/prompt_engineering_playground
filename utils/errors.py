@@ -18,26 +18,16 @@ ERROR_MESSAGES = {
     413: "Payload Too Large: The request body is too big for the server.",
     415: "Unsupported Media Type: The server cannot process the content type.",
     422: "Unprocessable Entity: The JSON was valid, but the input was invalid.",
-    425: "Too Early: The request was sent too early; try again later.",
+    408: "Request Timeout: The server timed out waiting for the request.",
     429: "Rate Limit Exceeded: Too many requests or quota exhausted. Retry later.",
     500: "Internal Server Error: Something went wrong on the server side.",
     502: "Bad Gateway: An upstream server failed. This may be temporary.",
     503: "Service Unavailable: The server is overloaded or under maintenance.",
     504: "Gateway Timeout: The upstream server timed out.",
-    408: "Request Timeout: The server timed out waiting for the request.",
-    # Common CDN edge cases (Cloudflare et al.)
-    520: "Web Server Returned an Unknown Error.",
-    521: "Web Server Is Down.",
-    522: "Connection Timed Out.",
-    523: "Origin Is Unreachable.",
-    524: "A Timeout Occurred.",
 }
 
-
-# Transient HTTP codes worth retrying
-TRANSIENT_STATUS_CODES = {
-    408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524
-}
+# Minimal transient set for OpenAI-compatible chat APIs
+TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
 def _get_status_code(err: Exception) -> Optional[int]:
     return getattr(err, "status_code", None) or getattr(getattr(err, "response", None), "status_code", None)

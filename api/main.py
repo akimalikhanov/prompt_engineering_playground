@@ -9,8 +9,15 @@ from services.router import route_call
 from utils.logging import setup_logging, correlation_id_middleware
 from dotenv import load_dotenv
 import os
+import mlflow
 
 load_dotenv()
+
+
+mlflow.set_tracking_uri(f"http://localhost:{os.getenv('MLFLOW_PORT')}")
+mlflow.set_experiment("pep-playground")
+mlflow.openai.autolog()
+
 
 _models_config = _load_models_config()
 _models_list = [model['label'] for model in _models_config['models']]
@@ -25,6 +32,8 @@ logger = setup_logging(
     file_path="logs/app.log", # stored locally in ./logs
     hijack_uvicorn=True,      # <- key to avoid duplicate uvicorn+app logs
 )
+
+app.middleware("http")(correlation_id_middleware)
 
 # -------------------------
 # Endpoints
@@ -41,6 +50,7 @@ def health() -> HealthResponse:
 def list_models() -> ModelsResponse:
     return ModelsResponse(models=_models_list)
 
+# @mlflow.trace()
 @app.post(
     "/chat",
     response_model=ChatResponse,
@@ -62,7 +72,8 @@ def chat(body: ChatRequest):
         }
 
     return ChatResponse.model_validate(final_res)
-    
+
+# @mlflow.trace()
 @app.post(
     "/chat.stream",
     response_model=None,  # streaming is not a Pydantic field
@@ -87,6 +98,7 @@ def chat_stream(body: ChatRequest):
 
 # ==========================================================================
 # ==========================================================================
+# @mlflow.trace()
 @app.post("/chat.streamsse", response_class=StreamingResponse)
 def chat_stream_sse(body: ChatRequest):
     gen = route_call(

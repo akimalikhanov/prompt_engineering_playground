@@ -10,7 +10,7 @@ wheels/
 .venv
 
 # Folders
-storage/llama3.1-8b-awq/
+storage/
 
 # Mics
 .env

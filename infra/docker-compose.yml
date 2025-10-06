@@ -1,0 +1,86 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: mlflow-postgres
+    # Use CLI --env-file so variable interpolation works from ../.env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+
+      # Passed through so the init script can read them
+      MLFLOW_DB: ${MLFLOW_DB}
+      MLFLOW_DB_USER: ${MLFLOW_DB_USER}
+      MLFLOW_DB_PASSWORD: ${MLFLOW_DB_PASSWORD}
+      APP_DB: ${APP_DB}
+      APP_DB_USER: ${APP_DB_USER}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD}
+    volumes:
+      - ../storage/postgres:/var/lib/postgresql/data
+      - ./db_init:/docker-entrypoint-initdb.d
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: mlflow-minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    volumes:
+      - ../storage/minio:/data
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web Console
+    restart: unless-stopped
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: mlflow-minio-init
+    depends_on:
+      - minio
+    env_file: ../.env
+    volumes:
+      - ./minio_init:/scripts
+    entrypoint: ["/bin/sh", "/scripts/00_minio_init.sh"]
+    restart: "no"
+
+  mlflow:
+    build:
+      context: ..
+      dockerfile: ./infra/Dockerfile.mlflow
+    container_name: mlflow-server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    env_file: ../.env
+    environment:
+      # S3/MinIO config (needed by MLflow to write artifacts)
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_DEFAULT_REGION: us-east-1
+    command:
+      - sh
+      - -lc
+      - >
+        mlflow server
+        --host 0.0.0.0
+        --port ${MLFLOW_PORT}
+        --backend-store-uri postgresql+psycopg2://${MLFLOW_DB_USER}:${MLFLOW_DB_PASSWORD}@postgres:5432/${MLFLOW_DB}
+        --artifacts-destination s3://${MINIO_BUCKET}
+        --serve-artifacts
+    ports:
+      - "${MLFLOW_PORT}:${MLFLOW_PORT}"
+    restart: unless-stopped
+
+
