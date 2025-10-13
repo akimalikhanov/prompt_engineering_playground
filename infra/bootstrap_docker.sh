@@ -6,6 +6,22 @@ COMPOSE_FILE="infra/docker-compose.yml"
 ENV_FILE=".env"
 POSTGRES_DIR="storage/postgres"
 MINIO_DIR="storage/minio"
+CLEAN=false
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --clean)
+      CLEAN=true
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1"
+      echo "Usage: $0 [--clean]"
+      exit 1
+      ;;
+  esac
+done
 
 # --- Helpers ---
 need_cmd() { command -v "$1" >/dev/null 2>&1 || { echo "Missing command: $1"; exit 1; }; }
@@ -21,13 +37,26 @@ need_cmd bash
 [ -f "$COMPOSE_FILE" ] || { echo "Compose file not found: $COMPOSE_FILE"; exit 1; }
 [ -f "$ENV_FILE" ]     || { echo ".env file not found: $ENV_FILE"; exit 1; }
 
+# --- Clean storage if requested ---
+if [ "$CLEAN" = true ]; then
+  log "Cleaning storage directories (--clean flag provided)"
+  maybe_sudo rm -rf "$POSTGRES_DIR"
+  rm -rf "$MINIO_DIR"
+fi
+
 # --- Folders & permissions ---
 log "Preparing storage directories"
 mkdir -p "$POSTGRES_DIR" "$MINIO_DIR"
 # Postgres inside container runs as uid:gid 999:999 on alpine image
-maybe_sudo chown -R 999:999 "$POSTGRES_DIR"
-maybe_sudo chmod 700 "$POSTGRES_DIR"
-chmod -R u+rwX "$MINIO_DIR"
+# Use Docker to set permissions if sudo is not available non-interactively
+if have_sudo && sudo -n true 2>/dev/null; then
+  maybe_sudo chown -R 999:999 "$POSTGRES_DIR"
+  maybe_sudo chmod 700 "$POSTGRES_DIR"
+else
+  log "Using Docker to set postgres directory permissions (sudo not available)"
+  docker run --rm -v "$(pwd)/$POSTGRES_DIR:/data" alpine sh -c "chown -R 999:999 /data && chmod 700 /data"
+fi
+chmod -R u+rwX "$MINIO_DIR" 2>/dev/null || true
 
 # --- Fresh (re)start baseline (down doesn't touch volumes we just set up) ---
 log "Stopping any existing stack (if running)"
@@ -57,15 +86,16 @@ if [ "$pg_state" != "healthy" ]; then
   exit 1
 fi
 
-# --- Wait for MinIO ready (HTTP readiness endpoint on host port 9000) ---
-log "Waiting for MinIO (S3 API) readiness on http://localhost:9000/minio/health/ready"
+# --- Wait for MinIO ready (HTTP readiness endpoint on host port) ---
+MINIO_API_PORT="$(grep -E '^MINIO_API_PORT=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || echo 9000)"
+log "Waiting for MinIO (S3 API) readiness on http://localhost:${MINIO_API_PORT}/minio/health/ready"
 for i in {1..60}; do
-  if curl -fsS http://localhost:9000/minio/health/ready >/dev/null 2>&1; then
+  if curl -fsS http://localhost:${MINIO_API_PORT}/minio/health/ready >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
-if ! curl -fsS http://localhost:9000/minio/health/ready >/dev/null 2>&1; then
+if ! curl -fsS http://localhost:${MINIO_API_PORT}/minio/health/ready >/dev/null 2>&1; then
   echo "MinIO did not become ready in time."
   exit 1
 fi
@@ -78,20 +108,50 @@ log "Bootstrapping MinIO (minio-init)"
 log "Starting MLflow server"
 "${DC[@]}" up -d mlflow
 
+# --- Start OpenTelemetry Collector ---
+log "Starting OpenTelemetry Collector"
+"${DC[@]}" up -d otel-collector
+
+# --- Wait for Collector health endpoint ---
+OTEL_HEALTH_PORT="$(grep -E '^OTEL_HEALTH_PORT=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || echo 13133)"
+log "Waiting for OpenTelemetry Collector health on http://localhost:${OTEL_HEALTH_PORT}/healthz"
+for i in {1..60}; do
+  if curl -fsS http://localhost:${OTEL_HEALTH_PORT}/healthz >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+if ! curl -fsS http://localhost:${OTEL_HEALTH_PORT}/healthz >/dev/null 2>&1; then
+  echo "OpenTelemetry Collector did not become healthy in time."
+  exit 1
+fi
+
+# --- Start Grafana ---
+log "Starting Grafana"
+"${DC[@]}" up -d grafana
+
 # --- Show status & useful URLs ---
 log "Compose status"
 "${DC[@]}" ps
 
 # Pull ports from .env for display (defaults are safe fallbacks)
+POSTGRES_PORT="$(grep -E '^POSTGRES_PORT=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || echo 5433)"
+MINIO_CONSOLE_PORT="$(grep -E '^MINIO_CONSOLE_PORT=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || echo 9001)"
 MLFLOW_PORT="$(grep -E '^MLFLOW_PORT=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || echo 5000)"
+GRAFANA_PORT="$(grep -E '^GRAFANA_PORT=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || echo 3000)"
+TEMPO_HTTP_PORT="$(grep -E '^TEMPO_HTTP_PORT=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || echo 3200)"
+OTEL_HTTP_PORT="$(grep -E '^OTEL_HTTP_PORT=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || echo 4318)"
 
 cat <<EOF
 
 ✅ All set!
 
 Services:
-- Postgres:          localhost:5433 (container port 5432)
-- MinIO S3 API:      http://localhost:9000
-- MinIO Console:     http://localhost:9001
+- Postgres:          localhost:${POSTGRES_PORT} (container port 5432)
+- MinIO S3 API:      http://localhost:${MINIO_API_PORT}
+- MinIO Console:     http://localhost:${MINIO_CONSOLE_PORT} (minioadmin/minioadmin)
 - MLflow Tracking:   http://localhost:${MLFLOW_PORT}
+- Grafana:           http://localhost:${GRAFANA_PORT} (admin/admin)
+- Tempo:             http://localhost:${TEMPO_HTTP_PORT}
+- OTEL Collector:    http://localhost:${OTEL_HTTP_PORT} (OTLP/HTTP)
 EOF

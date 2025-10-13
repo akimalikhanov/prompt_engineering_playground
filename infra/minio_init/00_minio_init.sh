@@ -20,4 +20,12 @@ fi
 # (Optional) enable versioning for MLflow artifacts
 # /usr/bin/mc version enable "minio/${MINIO_BUCKET}" || true
 
+echo "[init] ensuring Tempo traces bucket '${TEMPO_BUCKET:-tempo-traces}' exists…"
+if /usr/bin/mc ls "minio/${TEMPO_BUCKET:-tempo-traces}" >/dev/null 2>&1; then
+  echo "[init] bucket '${TEMPO_BUCKET:-tempo-traces}' already exists, skipping"
+else
+  /usr/bin/mc mb "minio/${TEMPO_BUCKET:-tempo-traces}"
+  echo "[init] bucket '${TEMPO_BUCKET:-tempo-traces}' created"
+fi
+
 echo "[init] MinIO initialization complete ✅"

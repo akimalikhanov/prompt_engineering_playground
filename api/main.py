@@ -13,6 +13,25 @@ import mlflow
 
 load_dotenv()
 
+# Ensure MLflow traces are exported both to MLflow Tracking and via OTLP to the collector
+os.environ.setdefault("MLFLOW_TRACE_ENABLE_OTLP_DUAL_EXPORT", "true")
+
+# Standardize OTLP settings for libraries that read either generic or traces-specific vars
+os.environ.setdefault("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+os.environ.setdefault("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "http/protobuf")
+
+# Send OTLP to local collector (exposed by docker-compose on host port 4318)
+os.environ.setdefault("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://localhost:4318/v1/traces")
+
+# Service identity
+os.environ.setdefault("OTEL_RESOURCE_ATTRIBUTES", "service.name=pep-api,service.namespace=pep,deployment.environment=prod")
+os.environ.setdefault("OTEL_SERVICE_NAME", "pep-api")
+
+# Reduce MLflow trace verbosity to prevent oversized traces
+os.environ.setdefault("MLFLOW_TRACE_LOG_INPUTS_OUTPUTS", "false")
+os.environ.setdefault("MLFLOW_TRACE_LOG_MODEL_INFERENCES", "false")
+
+os.environ.setdefault('MLFLOW_LOG_LEVEL', 'INFO')
 
 mlflow.set_tracking_uri(f"http://localhost:{os.getenv('MLFLOW_PORT')}")
 mlflow.set_experiment("pep-playground")
@@ -50,7 +69,7 @@ def health() -> HealthResponse:
 def list_models() -> ModelsResponse:
     return ModelsResponse(models=_models_list)
 
-# @mlflow.trace()
+@mlflow.trace()
 @app.post(
     "/chat",
     response_model=ChatResponse,
@@ -73,7 +92,7 @@ def chat(body: ChatRequest):
 
     return ChatResponse.model_validate(final_res)
 
-# @mlflow.trace()
+@mlflow.trace()
 @app.post(
     "/chat.stream",
     response_model=None,  # streaming is not a Pydantic field
@@ -98,7 +117,7 @@ def chat_stream(body: ChatRequest):
 
 # ==========================================================================
 # ==========================================================================
-# @mlflow.trace()
+@mlflow.trace()
 @app.post("/chat.streamsse", response_class=StreamingResponse)
 def chat_stream_sse(body: ChatRequest):
     gen = route_call(

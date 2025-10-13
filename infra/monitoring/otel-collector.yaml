@@ -1,0 +1,39 @@
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318   # OTLP/HTTP
+
+processors:
+  memory_limiter:
+    check_interval: 2s
+    limit_percentage: 75
+    spike_limit_percentage: 25
+  batch:
+    timeout: 1s
+    send_batch_size: 512
+
+exporters:
+  logging:
+    verbosity: detailed
+  otlphttp/tempo:
+    endpoint: http://tempo:4318
+
+extensions:
+  health_check: {}
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [logging, otlphttp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [logging]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [logging]

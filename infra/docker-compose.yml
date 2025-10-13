@@ -19,7 +19,7 @@ services:
       - ../storage/postgres:/var/lib/postgresql/data
       - ./db_init:/docker-entrypoint-initdb.d
     ports:
-      - "5433:5432"
+      - "${POSTGRES_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL","pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -37,8 +37,8 @@ services:
     volumes:
       - ../storage/minio:/data
     ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # Web Console
+      - "${MINIO_API_PORT:-9000}:9000"   # S3 API
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"   # Web Console
     restart: unless-stopped
 
   minio-init:
@@ -83,4 +83,65 @@ services:
       - "${MLFLOW_PORT}:${MLFLOW_PORT}"
     restart: unless-stopped
 
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.103.0
+    container_name: otel-collector
+    command: ["--config=/etc/otelcol/otel-collector.yaml"]
+    volumes:
+      - ./monitoring/otel-collector.yaml:/etc/otelcol/otel-collector.yaml:ro
+    depends_on:
+      - tempo
+    ports:
+      - "${OTEL_HTTP_PORT:-4318}:4318"     # OTLP/HTTP
+      - "${OTEL_HEALTH_PORT:-13133}:13133"   # health check
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/bin/sh", "-c", "curl -f http://localhost:13133/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
+  tempo:
+    image: grafana/tempo:latest
+    container_name: tempo
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    depends_on:
+      - minio
+    env_file: ../.env
+    environment:
+      # S3/MinIO config for storing traces
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_DEFAULT_REGION: us-east-1
+    volumes:
+      - ./monitoring/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/tmp/tempo    # persistent local storage for WAL
+    ports:
+      - "${TEMPO_HTTP_PORT:-3200}:3200"   # Tempo HTTP API
+      - "${TEMPO_GRPC_PORT:-4317}:4317"   # OTLP/gRPC (from collector)
+      - "${TEMPO_OTLP_HTTP_PORT:-4319}:4318"   # OTLP/HTTP (optional external)
+      - "${TEMPO_MEMBERLIST_PORT:-7946}:7946"   # memberlist port
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_MAX_REQUEST_SIZE=50MB
+      - GF_SERVER_MAX_QUERY_RESULT_SIZE=50MB
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"   # UI → http://localhost:3000
+    restart: unless-stopped
+    depends_on:
+      - tempo
+
+    
+volumes:
+  tempo-data:
+  grafana-data:
