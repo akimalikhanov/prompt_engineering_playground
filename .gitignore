@@ -26,3 +26,4 @@ test_prompts.txt
 
 experiments/
 docs/
+api/main_with_logging.py

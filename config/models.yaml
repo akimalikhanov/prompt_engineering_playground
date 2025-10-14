@@ -61,6 +61,24 @@ models:
       streaming: true
     params_override: {}       # keep empty to use defaults
 
+  - id: gpt-o4-mini               # matches your --model_id choices
+    label: "OpenAI o4-mini"
+    provider: openai
+    model_name: "o4-mini"
+    pricing:
+      currency: USD
+      unit: per_1k_tokens
+      input: 0.00110              # $/1,000 input tokens for o4-mini
+      output: 0.00440             # $/1,000 output tokens
+      cached_input: null
+      cached_output: null
+      rounding: exact
+      effective: 2025-04-16       # release date
+      notes: "OpenAI list price: $1.10 per 1M input tokens, $4.40 per 1M output tokens. Compact reasoning model with 200k context window."
+    capabilities:
+      streaming: true
+    params_override: {}       # keep empty to use defaults
+
   - id: gemini-flash-lite
     label: "Gemini 2.5 Flash Lite"
     provider: google

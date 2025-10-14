@@ -49,9 +49,15 @@ def _unified_openai_api_call(
         - Returns a dict with:
             {
               "text": str,
-              "usage": {"prompt_tokens": int, "completion_tokens": int},
-              "metrics": {"ttft_ms": float|None, "latency_ms": float,
-                          "model": str, "cost_usd": float|None}
+              "metrics": {
+                  "ttft_ms": float|None,
+                  "latency_ms": float,
+                  "model": str,
+                  "prompt_tokens": int|None,
+                  "completion_tokens": int|None,
+                  "total_tokens": int|None,
+                  "cost_usd": float|None
+              }
             }
 
     Returns:
@@ -69,10 +75,19 @@ def _unified_openai_api_call(
         "messages": normalized_messages,
         "temperature": params.get("temperature"),
         "top_p": params.get("top_p"),
-        "max_tokens": params.get("max_tokens"),
-        "seed": params.get("seed"),
         "stream": stream,
     }
+    
+    # O-series models (o1, o3, o4) use max_completion_tokens instead of max_tokens
+    if model.startswith("o") and ("-mini" in model or model.startswith("o1") or model.startswith("o3") or model.startswith("o4")):
+        kwargs["max_completion_tokens"] = params.get("max_tokens")
+    else:
+        kwargs["max_tokens"] = params.get("max_tokens")
+    
+    # O-series models don't support seed parameter
+    if not (model.startswith("o") and ("-mini" in model or model.startswith("o1") or model.startswith("o3") or model.startswith("o4"))):
+        kwargs["seed"] = params.get("seed")
+    
     # Some OpenAI-compatible providers balk at 'seed' (e.g., Gemini via proxy)
     if "gemini" in model:
         kwargs.pop("seed", None)
@@ -215,16 +230,17 @@ def _unified_openai_api_call(
     prompt_tokens = getattr(usage, "prompt_tokens", None) if usage else None
     completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
     total_tokens = getattr(usage, "total_tokens", None) if usage else None
+    cost_usd = _lookup_pricing(model, prompt_tokens, completion_tokens)
+    
     return {
         "text": (msg.content or ""),
-        "usage": {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens
-        },
         "metrics": {
             "ttft_ms": None,  # not meaningful for non-streaming
             "latency_ms": round(total * 1000, 1),
             "model": model,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "cost_usd": cost_usd,
         }
     }

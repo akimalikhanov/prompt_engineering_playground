@@ -66,9 +66,12 @@ class Metrics(BaseModel):
     ttft_ms: Optional[float] = None
     latency_ms: Annotated[float, Field(ge=0)]
     model: Annotated[str, Field(min_length=1, max_length=100)]
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    cost_usd: Optional[float] = None
 
 class ChatResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: Annotated[str, Field(min_length=0, max_length=7000)]
-    usage: Usage
     metrics: Metrics

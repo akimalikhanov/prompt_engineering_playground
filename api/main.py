@@ -86,8 +86,15 @@ def chat(body: ChatRequest):
 
     final_res = {
             "text": result["text"],
-            "usage": result.get("usage", { "prompt_tokens": 0, "completion_tokens": 0, 'total_tokens': 0}),
-            "metrics": result.get("metrics", {"ttft_ms": None, "latency_ms": 0.0, "model": body.model_id}),
+            "metrics": result.get("metrics", {
+                "ttft_ms": None,
+                "latency_ms": 0.0,
+                "model": body.model_id,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "cost_usd": None
+            }),
         }
 
     return ChatResponse.model_validate(final_res)
