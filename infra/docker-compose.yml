@@ -95,11 +95,8 @@ services:
       - "${OTEL_HTTP_PORT:-4318}:4318"     # OTLP/HTTP
       - "${OTEL_HEALTH_PORT:-13133}:13133"   # health check
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "/bin/sh", "-c", "curl -f http://localhost:13133/ || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
+    # Note: Healthcheck removed as this minimal image lacks shell/curl/wget
+    # Service health can be verified via: curl http://localhost:13133/
 
   tempo:
     image: grafana/tempo:latest

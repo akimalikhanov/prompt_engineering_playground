@@ -44,7 +44,7 @@ storage:
     s3:
       bucket: tempo-traces
       endpoint: minio:9000
-      insecure: true
+      insecure: true # should be false in production, add tls certificate
       forcepathstyle: true
 
 querier:

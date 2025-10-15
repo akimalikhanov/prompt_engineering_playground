@@ -78,7 +78,10 @@ log "Waiting for postgres to become healthy"
 pg_state=""
 for i in {1..60}; do
   pg_state="$(docker inspect -f '{{.State.Health.Status}}' mlflow-postgres 2>/dev/null || echo 'unknown')"
-  [ "$pg_state" = "healthy" ] && break
+  if [ "$pg_state" = "healthy" ]; then
+    log "✅ Postgres is healthy"
+    break
+  fi
   sleep 2
 done
 if [ "$pg_state" != "healthy" ]; then
@@ -91,6 +94,7 @@ MINIO_API_PORT="$(grep -E '^MINIO_API_PORT=' "$ENV_FILE" | tail -n1 | cut -d= -f
 log "Waiting for MinIO (S3 API) readiness on http://localhost:${MINIO_API_PORT}/minio/health/ready"
 for i in {1..60}; do
   if curl -fsS http://localhost:${MINIO_API_PORT}/minio/health/ready >/dev/null 2>&1; then
+    log "✅ MinIO is ready"
     break
   fi
   sleep 2
@@ -114,14 +118,15 @@ log "Starting OpenTelemetry Collector"
 
 # --- Wait for Collector health endpoint ---
 OTEL_HEALTH_PORT="$(grep -E '^OTEL_HEALTH_PORT=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || echo 13133)"
-log "Waiting for OpenTelemetry Collector health on http://localhost:${OTEL_HEALTH_PORT}/healthz"
+log "Waiting for OpenTelemetry Collector health on http://localhost:${OTEL_HEALTH_PORT}/"
 for i in {1..60}; do
-  if curl -fsS http://localhost:${OTEL_HEALTH_PORT}/healthz >/dev/null 2>&1; then
+  if curl -fsS http://localhost:${OTEL_HEALTH_PORT}/ >/dev/null 2>&1; then
+    log "✅ OTEL Collector is healthy"
     break
   fi
   sleep 2
 done
-if ! curl -fsS http://localhost:${OTEL_HEALTH_PORT}/healthz >/dev/null 2>&1; then
+if ! curl -fsS http://localhost:${OTEL_HEALTH_PORT}/ >/dev/null 2>&1; then
   echo "OpenTelemetry Collector did not become healthy in time."
   exit 1
 fi

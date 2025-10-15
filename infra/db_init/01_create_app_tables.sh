@@ -23,23 +23,40 @@ CREATE TABLE IF NOT EXISTS app.prompt_techniques (
 );
 
 -- ===============================
--- Prompt examples (multi-message)
+-- Prompt examples (multi-message, versioned, one active)
 -- ===============================
 CREATE TABLE IF NOT EXISTS app.prompt_examples (
   example_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
   technique_key  TEXT NOT NULL REFERENCES app.prompt_techniques(key) ON DELETE CASCADE,
-  title          TEXT NOT NULL,                -- short label
+  title          TEXT NOT NULL,                -- short label (e.g. "summarizer")
+
+  version        INT  NOT NULL DEFAULT 1,      -- version number
+  status         TEXT NOT NULL DEFAULT 'active',  -- 'active', 'archived', 'draft'
+
   language       TEXT NOT NULL DEFAULT 'en',
   messages       JSONB NOT NULL,               -- [{role:'system|user|assistant|tool', content:'...'}, ...]
   variables      JSONB NOT NULL DEFAULT '[]',  -- [{"name":"text","type":"string","required":true,"desc":"..."}]
   model_hint     TEXT,
+
   is_enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+
   created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (technique_key, title)
+
+  -- Each technique + title can have multiple versions,
+  -- but version numbers must be unique per pair
+  UNIQUE (technique_key, title, version)
 );
 
-CREATE INDEX IF NOT EXISTS idx_prompt_examples_technique ON app.prompt_examples(technique_key);
+-- ✅ Partial unique index: only one ACTIVE version per (technique_key, title)
+CREATE UNIQUE INDEX IF NOT EXISTS ux_prompt_examples_active
+  ON app.prompt_examples (technique_key, title)
+  WHERE status = 'active';
+
+-- Optional: quick lookup of latest versions
+CREATE INDEX IF NOT EXISTS idx_prompt_examples_latest
+  ON app.prompt_examples (technique_key, title, version DESC);
 
 -- ===============================
 -- Runs (analytics-oriented)
@@ -67,6 +84,8 @@ CREATE TABLE IF NOT EXISTS app.runs (
   prompt_tokens     INTEGER,
   completion_tokens INTEGER,
   total_tokens      INTEGER,
+  reasoning_tokens  INTEGER GENERATED ALWAYS AS
+                     (total_tokens - coalesce(prompt_tokens, 0) - coalesce(completion_tokens, 0)) STORED,
   cost_usd          NUMERIC(12,6),
 
   latency_ms        INTEGER,

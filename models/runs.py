@@ -29,10 +29,12 @@ class Run(Base):
     variables_json = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     input_text = Column(Text)
     output_text = Column(Text)
+    output_preview = Column(Text)  # Generated column: first 400 chars of output_text
     
     prompt_tokens = Column(Integer)
     completion_tokens = Column(Integer)
     total_tokens = Column(Integer)
+    reasoning_tokens = Column(Integer)  # Generated column: total_tokens - (prompt_tokens + completion_tokens)
     cost_usd = Column(Numeric(12, 6))
     
     latency_ms = Column(Integer)
