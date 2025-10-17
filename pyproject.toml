@@ -9,6 +9,7 @@ dependencies = [
     "google-genai>=1.32.0",
     "gradio>=5.47.1",
     "huggingface-hub[cli]>=0.34.4",
+    "jinja2>=3.1.6",
     "mlflow-tracing>=3.4.0",
     "openai>=1.102.0",
     "opentelemetry-api>=1.37.0",
@@ -17,6 +18,7 @@ dependencies = [
     "opentelemetry-sdk>=1.37.0",
     "psycopg2-binary>=2.9.11",
     "python-dotenv>=1.1.1",
+    "requests>=2.32.5",
     "sqlalchemy>=2.0.44",
     "vllm[auto,torch-backend]>=0.10.2",
 ]

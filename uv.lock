@@ -2145,6 +2145,7 @@ dependencies = [
     { name = "google-genai" },
     { name = "gradio" },
     { name = "huggingface-hub", extra = ["cli"] },
+    { name = "jinja2" },
     { name = "mlflow-tracing" },
     { name = "openai" },
     { name = "opentelemetry-api" },
@@ -2153,6 +2154,7 @@ dependencies = [
     { name = "opentelemetry-sdk" },
     { name = "psycopg2-binary" },
     { name = "python-dotenv" },
+    { name = "requests" },
     { name = "sqlalchemy" },
     { name = "vllm" },
 ]
@@ -2163,6 +2165,7 @@ requires-dist = [
     { name = "google-genai", specifier = ">=1.32.0" },
     { name = "gradio", specifier = ">=5.47.1" },
     { name = "huggingface-hub", extras = ["cli"], specifier = ">=0.34.4" },
+    { name = "jinja2", specifier = ">=3.1.6" },
     { name = "mlflow-tracing", specifier = ">=3.4.0" },
     { name = "openai", specifier = ">=1.102.0" },
     { name = "opentelemetry-api", specifier = ">=1.37.0" },
@@ -2171,6 +2174,7 @@ requires-dist = [
     { name = "opentelemetry-sdk", specifier = ">=1.37.0" },
     { name = "psycopg2-binary", specifier = ">=2.9.11" },
     { name = "python-dotenv", specifier = ">=1.1.1" },
+    { name = "requests", specifier = ">=2.32.5" },
     { name = "sqlalchemy", specifier = ">=2.0.44" },
     { name = "vllm", extras = ["auto", "torch-backend"], specifier = ">=0.10.2" },
 ]

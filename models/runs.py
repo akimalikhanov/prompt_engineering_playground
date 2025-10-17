@@ -1,7 +1,7 @@
 """
 SQLAlchemy model for app.runs table
 """
-from sqlalchemy import Column, BigInteger, Integer, String, Text, Boolean, TIMESTAMP, Numeric, text
+from sqlalchemy import Column, BigInteger, Integer, String, Text, Boolean, TIMESTAMP, Numeric, Computed, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -29,12 +29,12 @@ class Run(Base):
     variables_json = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     input_text = Column(Text)
     output_text = Column(Text)
-    output_preview = Column(Text)  # Generated column: first 400 chars of output_text
+    output_preview = Column(Text, Computed("left(coalesce(output_text,''), 400)"))  # Generated column: first 400 chars of output_text
     
     prompt_tokens = Column(Integer)
     completion_tokens = Column(Integer)
     total_tokens = Column(Integer)
-    reasoning_tokens = Column(Integer)  # Generated column: total_tokens - (prompt_tokens + completion_tokens)
+    reasoning_tokens = Column(Integer, Computed("total_tokens - coalesce(prompt_tokens, 0) - coalesce(completion_tokens, 0)"))  # Generated column: total_tokens - (prompt_tokens + completion_tokens)
     cost_usd = Column(Numeric(12, 6))
     
     latency_ms = Column(Integer)
