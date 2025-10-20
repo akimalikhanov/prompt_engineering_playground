@@ -1,11 +1,11 @@
 #!/bin/bash
-# Script to run the Prompts API server
+# Script to run the API server
 
 set -e
 
-echo "Starting Prompts API server..."
-echo "API will be available at: http://localhost:8001"
-echo "Documentation: http://localhost:8001/docs"
+echo "Starting API server..."
+echo "API will be available at: http://localhost:8000"
+echo "Documentation: http://localhost:8000/docs"
 echo ""
 
 # Check if .env exists
@@ -19,7 +19,7 @@ fi
 source .env
 
 # Run the API server (only watch specific directories)
-uvicorn api.prompts:app --reload --port 8001 --host 0.0.0.0 \
+uvicorn api.main:app --reload --port 8000 --host 0.0.0.0 \
   --reload-dir api \
   --reload-dir schemas \
   --reload-dir models \

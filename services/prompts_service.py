@@ -51,7 +51,7 @@ def get_latest_prompts(
             WHERE 1=1
             AND (:technique_key IS NULL OR technique_key = :technique_key)
             AND (:enabled IS NULL OR is_enabled = :enabled)
-            AND (:q IS NULL OR title ILIKE :q_pattern OR technique_key ILIKE :q_pattern)
+            AND (:q_pattern IS NULL OR title ILIKE :q_pattern OR technique_key ILIKE :q_pattern)
             ORDER BY created_at DESC
         """)
         
@@ -61,7 +61,6 @@ def get_latest_prompts(
             {
                 "technique_key": technique_key,
                 "enabled": enabled,
-                "q": q,
                 "q_pattern": q_pattern
             }
         )
