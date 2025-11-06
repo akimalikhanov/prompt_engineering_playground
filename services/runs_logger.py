@@ -193,3 +193,64 @@ def log_run(
     finally:
         session.close()
 
+
+def get_run_by_id(run_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Get a run by its ID from the database.
+    
+    Args:
+        run_id: The ID of the run to retrieve
+    
+    Returns:
+        A dictionary containing the run data, or None if not found
+    """
+    session = SessionLocal()
+    try:
+        run = session.query(Run).filter(Run.id == run_id).first()
+        
+        if not run:
+            return None
+        
+        # Convert SQLAlchemy model to dict
+        run_dict = {
+            "id": run.id,
+            "occurred_at": run.occurred_at.isoformat() if run.occurred_at else None,
+            "trace_id": run.trace_id,
+            "request_id": run.request_id,
+            "session_id": run.session_id,
+            "user_id": run.user_id,
+            "provider_key": run.provider_key,
+            "model_id": run.model_id,
+            "prompt_key": run.prompt_key,
+            "prompt_version": run.prompt_version,
+            "technique_key": run.technique_key,
+            "params_json": run.params_json or {},
+            "variables_json": run.variables_json or [],
+            "input_text": run.input_text,
+            "output_text": run.output_text,
+            "output_preview": run.output_preview,
+            "prompt_tokens": run.prompt_tokens,
+            "completion_tokens": run.completion_tokens,
+            "total_tokens": run.total_tokens,
+            "reasoning_tokens": run.reasoning_tokens,
+            "cost_usd": float(run.cost_usd) if run.cost_usd is not None else None,
+            "latency_ms": run.latency_ms,
+            "ttft_ms": run.ttft_ms,
+            "status": run.status,
+            "error_type": run.error_type,
+            "error_code": run.error_code,
+            "error_message": run.error_message,
+            "cached": run.cached,
+            "pricing_snapshot": run.pricing_snapshot or {},
+            "metadata_json": run.metadata_json or {},
+        }
+        
+        return run_dict
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(os.getenv("LOGGER_NAME", "llm-router"))
+        logger.error(f"Failed to get run {run_id} from database: {e}", exc_info=True)
+        return None
+    finally:
+        session.close()
+

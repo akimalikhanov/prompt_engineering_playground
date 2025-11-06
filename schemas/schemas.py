@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, ConfigDict, field_validator
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional, Union, Dict, Any
 from typing_extensions import Annotated
 
 
@@ -75,3 +75,36 @@ class ChatResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: Annotated[str, Field(min_length=0, max_length=7000)]
     metrics: Metrics
+
+class RunResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: int
+    occurred_at: str
+    trace_id: str
+    request_id: Optional[str] = None
+    session_id: Optional[str] = None
+    user_id: Optional[str] = None
+    provider_key: str
+    model_id: str
+    prompt_key: Optional[str] = None
+    prompt_version: Optional[str] = None
+    technique_key: Optional[str] = None
+    params_json: Dict[str, Any] = {}
+    variables_json: List[Dict[str, Any]] = []
+    input_text: Optional[str] = None
+    output_text: Optional[str] = None
+    output_preview: Optional[str] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    reasoning_tokens: Optional[int] = None
+    cost_usd: Optional[float] = None
+    latency_ms: Optional[int] = None
+    ttft_ms: Optional[int] = None
+    status: str
+    error_type: Optional[str] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    cached: bool = False
+    pricing_snapshot: Dict[str, Any] = {}
+    metadata_json: Dict[str, Any] = {}

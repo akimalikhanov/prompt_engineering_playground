@@ -17,7 +17,7 @@ from schemas.prompts import (
     PromptMessage
 )
 from services.router import route_call
-from services.runs_logger import log_run
+from services.runs_logger import log_run, get_run_by_id
 from services.prompts_service import (
     get_latest_prompts,
     create_prompt,
@@ -60,6 +60,12 @@ mlflow.set_tracking_uri(f"http://localhost:{os.getenv('MLFLOW_PORT')}")
 mlflow.set_experiment("pep-playground")
 mlflow.openai.autolog()
 
+# Ensure tracing is enabled
+try:
+    mlflow.tracing.enable()
+except Exception:
+    pass  # Tracing might already be enabled or not available
+
 
 _models_config = _load_models_config()
 _models_list = [model['label'] for model in _models_config['models']]
@@ -92,17 +98,18 @@ def health() -> HealthResponse:
 def list_models() -> ModelsResponse:
     return ModelsResponse(models=_models_list)
 
-@mlflow.trace()
 @app.post(
     "/chat",
     response_model=ChatResponse,
     responses={200: {"description": "Complete response as JSON"}},
 )
+@mlflow.trace()
 def chat(body: ChatRequest):
     """Non-streaming chat endpoint with runs logging."""
     trace_id = get_correlation_id()
-    
+
     try:
+        # Do NOT start any spans if you want exactly one span total.
         result = route_call(
             provider_id=body.provider_id,
             model_id=body.model_id,
@@ -124,7 +131,6 @@ def chat(body: ChatRequest):
             }),
         }
 
-        # Log successful run to database
         log_run(
             trace_id=trace_id,
             provider_key=body.provider_id,
@@ -135,11 +141,9 @@ def chat(body: ChatRequest):
             metrics=result.get("metrics", {}),
             status="ok",
         )
-
         return ChatResponse.model_validate(final_res)
-    
+
     except Exception as e:
-        # Log failed run to database
         log_run(
             trace_id=trace_id,
             provider_key=body.provider_id,
@@ -152,7 +156,7 @@ def chat(body: ChatRequest):
         )
         raise
 
-@mlflow.trace()
+
 @app.post(
     "/chat.stream",
     response_model=None,
@@ -166,6 +170,10 @@ def chat(body: ChatRequest):
 def chat_stream(body: ChatRequest):
     """Streaming chat endpoint with runs logging."""
     trace_id = get_correlation_id()
+    
+    # For streaming endpoints, we don't use @mlflow.trace() decorator
+    # because it causes issues when the function returns a generator.
+    # MLflow autolog will still create traces for the underlying API calls.
     
     try:
         gen = route_call(
@@ -238,11 +246,14 @@ def chat_stream(body: ChatRequest):
         )
         raise
 
-@mlflow.trace()
 @app.post("/chat.streamsse", response_class=StreamingResponse)
 def chat_stream_sse(body: ChatRequest):
     """SSE streaming chat endpoint with runs logging."""
     trace_id = get_correlation_id()
+    
+    # For streaming endpoints, we don't use @mlflow.trace() decorator
+    # because it causes issues when the function returns a generator.
+    # MLflow autolog will still create traces for the underlying API calls.
     
     try:
         gen = route_call(
@@ -602,6 +613,33 @@ def update_prompt(example_id: str, body: PatchPromptRequest):
         raise
     except Exception as e:
         logger.error(f"Error updating prompt {example_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# Runs Endpoints
+# ============================================
+
+@app.get("/runs/{run_id}", response_model=RunResponse)
+def get_run(run_id: int):
+    """
+    Get a specific run by its ID from app.runs table.
+    
+    Path params:
+    - run_id: The ID of the run (BigInteger primary key)
+    """
+    try:
+        run = get_run_by_id(run_id)
+        
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+        
+        return RunResponse.model_validate(run)
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting run {run_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
