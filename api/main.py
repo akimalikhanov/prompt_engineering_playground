@@ -103,7 +103,7 @@ def list_models() -> ModelsResponse:
     response_model=ChatResponse,
     responses={200: {"description": "Complete response as JSON"}},
 )
-@mlflow.trace()
+# @mlflow.trace()
 def chat(body: ChatRequest):
     """Non-streaming chat endpoint with runs logging."""
     trace_id = get_correlation_id()

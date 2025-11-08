@@ -34,7 +34,7 @@ metrics_generator:
 
 compactor:
   compaction:
-    block_retention: 24h
+    block_retention: 0 # full retention, no compaction. TODO: change to 24h in production
 
 storage:
   trace:

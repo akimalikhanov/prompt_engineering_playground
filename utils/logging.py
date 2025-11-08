@@ -29,6 +29,11 @@ def _ensure_logs_dir(path: str):
     directory = os.path.dirname(os.path.abspath(path))
     if directory and not os.path.exists(directory):
         os.makedirs(directory, exist_ok=True)
+    # TimedRotatingFileHandler expects the target file to exist when it attempts
+    # to rotate (it renames the current file). Ensure the file is present so the
+    # first rotation doesn't raise FileNotFoundError.
+    if not os.path.exists(path):
+        open(path, "a", encoding="utf-8").close()
 
 def _add_handler_once(logger: logging.Logger, handler: logging.Handler):
     # Avoid duplicate handlers when re-calling setup

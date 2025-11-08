@@ -62,7 +62,7 @@ models:
     params_override: {}       # keep empty to use defaults
 
   - id: gpt-o4-mini               # matches your --model_id choices
-    label: "OpenAI o4-mini"
+    label: "OpenAI GPT o4-mini"
     provider: openai
     model_name: "o4-mini"
     pricing:

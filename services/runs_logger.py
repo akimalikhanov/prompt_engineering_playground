@@ -35,13 +35,24 @@ def extract_input_text(messages: Any, max_length: int = 2000) -> Optional[str]:
         if isinstance(messages, str):
             return messages[:max_length]
         elif isinstance(messages, list):
-            # Concatenate all message contents
-            texts = []
+            last_user_content: Optional[str] = None
+            last_any_content: Optional[str] = None
             for msg in messages:
-                if isinstance(msg, dict) and 'content' in msg:
-                    texts.append(f"{msg.get('role', 'user')}: {msg['content']}")
-            combined = " | ".join(texts)
-            return combined[:max_length]
+                content = None
+                role = "user"
+                if isinstance(msg, dict):
+                    role = msg.get("role", role)
+                    content = msg.get("content")
+                else:
+                    # Support Pydantic models (e.g., ChatMessage) or objects with attributes
+                    role = getattr(msg, "role", role)
+                    content = getattr(msg, "content", None)
+                if content:
+                    last_any_content = content
+                    if role == "user":
+                        last_user_content = content
+            chosen = last_user_content or last_any_content
+            return chosen[:max_length] if chosen else None
     except Exception:
         pass
     return None
