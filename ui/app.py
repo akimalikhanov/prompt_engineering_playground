@@ -145,6 +145,75 @@ def format_metrics_badges(metrics: Optional[Dict[str, Any]], ttft_fallback: Opti
     return f"<div class='badges'>{''.join(badges)}</div>"
 
 
+def _resolve_custom_delimiter(cs: str, ce: str) -> tuple[str, str]:
+    start_token = (cs or "<<<CUSTOM>>>").rstrip()
+    end_token = (ce or "<<<END>>>").lstrip()
+    start = f"{start_token}\n"
+    end = f"\n{end_token}"
+    return start, end
+
+
+def _resolve_markdown_delimiter(cs: str, _: str) -> tuple[str, str]:
+    language = cs.strip()
+    prefix = f"```{language}\n" if language else "```\n"
+    return prefix, "\n```"
+
+
+def _resolve_xml_delimiter(cs: str, _: str) -> tuple[str, str]:
+    tag = cs.strip() or "section"
+    return f"<{tag}>\n", f"\n</{tag}>"
+
+
+DELIMITER_DEFINITIONS: Dict[str, Dict[str, Any]] = {
+    # Baseline markdown-style fences
+    "``` … ```": {"start": "```\n", "end": "\n```"},
+    "\"\"\" … \"\"\"": {"start": "\"\"\"\n", "end": "\n\"\"\""},
+    "~~~ … ~~~": {"start": "~~~\n", "end": "\n~~~"},
+
+    # Dynamic helpers
+    "Markdown ```{lang} … ```": {
+        "resolver": _resolve_markdown_delimiter,
+        "requires_start": True,
+        "start_label": "Language",
+        "start_placeholder": "e.g. json, python, bash",
+    },
+    "XML <tag> … </tag>": {
+        "resolver": _resolve_xml_delimiter,
+        "requires_start": True,
+        "start_label": "Tag name",
+        "start_placeholder": "e.g. instruction",
+    },
+
+    # Comment / heredoc styles
+    "<!-- … -->": {"start": "<!--\n", "end": "\n-->"},
+    "/* … */": {"start": "/*\n", "end": "\n*/"},
+    "<<EOF … EOF (heredoc)": {"start": "<<EOF\n", "end": "\nEOF"},  # fixed label
+
+    # Front matter
+    "--- … --- (YAML front matter)": {"start": "---\n", "end": "\n---"},
+
+    # Model templates
+    "[INST] … [/INST]": {"start": "[INST]\n", "end": "\n[/INST]"},
+    "<|im_start|> … <|im_end|>": {"start": "<|im_start|>\n", "end": "\n<|im_end|>"},
+
+    # Section headers
+    "### BEGIN … ### END": {"start": "### BEGIN\n", "end": "\n### END"},
+
+    # Flexible customs
+    "Custom…": {
+        "resolver": _resolve_custom_delimiter,
+        "requires_start": True,
+        "requires_end": True,
+        "start_label": "Custom start token",
+        "start_placeholder": "e.g. [[[INSTRUCT]]]",
+        "end_label": "Custom end token",
+        "end_placeholder": "e.g. [[[/INSTRUCT]]]",
+    },
+}
+
+DELIMITER_CHOICES: List[str] = list(DELIMITER_DEFINITIONS.keys())
+
+
 def _build_messages(
     user_message: str,
     history: List[Tuple[str, str]],
@@ -382,6 +451,35 @@ def stream_chat(
     yield running_history, format_metrics_badges(metrics, ttft_ms, final_latency)
 
 
+def _delim_pair(style: str, custom_start: str, custom_end: str) -> tuple[str, str]:
+    style = (style or "").strip()
+    cs = (custom_start or "").strip()
+    ce = (custom_end or "").strip()
+
+    definition = DELIMITER_DEFINITIONS.get(style)
+    if not definition:
+        return "```\n", "\n```"
+
+    resolver = definition.get("resolver")
+    if resolver:
+        return resolver(cs, ce)
+
+    return definition["start"], definition["end"]
+
+
+def _insert_pair_at_end(current_text: str, style: str, cs: str, ce: str) -> str:
+    start, end = _delim_pair(style, cs, ce)
+    current_text = current_text or ""
+    # add a blank line before for readability unless already at a newline or empty
+    prefix = "" if (not current_text or current_text.endswith("\n")) else "\n"
+    return f"{current_text}{prefix}{start}{end}"
+
+def _wrap_entire_message(current_text: str, style: str, cs: str, ce: str) -> str:
+    start, end = _delim_pair(style, cs, ce)
+    current_text = current_text or ""
+    return f"{start}{current_text}\n{end}"
+
+
 def build_demo() -> gr.Blocks:
     models_choices = [
         (
@@ -406,7 +504,7 @@ def build_demo() -> gr.Blocks:
         )
 
         with gr.Row():
-            with gr.Column(scale=3):
+            with gr.Column(scale=2.75):
                 chatbot = gr.Chatbot(
                     label="Chat",
                     height=520,
@@ -422,56 +520,129 @@ def build_demo() -> gr.Blocks:
                 with gr.Row():
                     send_button = gr.Button("Send", variant="primary", elem_id="send-button")
                     clear_button = gr.Button("Clear", variant="secondary")
-            with gr.Column(scale=1, min_width=280):
-                model_dropdown = gr.Dropdown(
-                    label="Model",
-                    choices=models_choices,
-                    value=DEFAULT_MODEL_ID,
-                )
-                endpoint_dropdown = gr.Dropdown(
-                    label="Endpoint",
-                    choices=endpoint_choices,
-                    value=DEFAULT_ENDPOINT_KEY,
-                )
-                temperature_slider = gr.Slider(
-                    label="Temperature",
-                    minimum=0.0,
-                    maximum=2.0,
-                    step=0.1,
-                    value=defaults.get("temperature", 0.7),
-                )
-                top_p_slider = gr.Slider(
-                    label="Top-p",
-                    minimum=0.0,
-                    maximum=1.0,
-                    step=0.01,
-                    value=defaults.get("top_p", 1.0),
-                )
-                max_tokens_slider = gr.Slider(
-                    label="Max Tokens",
-                    minimum=1,
-                    maximum=4000,
-                    step=1,
-                    value=defaults.get("max_tokens", 512),
-                )
-                seed_text = gr.Textbox(
-                    label="Seed (optional)",
-                    placeholder="e.g. 42",
-                )
-                system_prompt_box = gr.Textbox(
-                    label="System prompt (optional)",
-                    placeholder="Add a system instruction to steer responses.",
-                    lines=3,
-                )
-                api_base_box = gr.Textbox(
-                    label="API base URL",
-                    value=DEFAULT_API_BASE_URL,
-                    placeholder="http://localhost:8000",
-                )
+
                 metrics_display = gr.Markdown(
                     value=format_metrics_badges({}, None, None),
                     label="Metrics",
                 )
+            with gr.Column(scale=1.25, min_width=420):
+
+                with gr.Accordion("Parameters", open=True):
+                    # ── General
+                    model_dropdown = gr.Dropdown(
+                        label="Model",
+                        choices=models_choices,
+                        value=DEFAULT_MODEL_ID,
+                    )
+                    endpoint_dropdown = gr.Dropdown(
+                        label="Endpoint",
+                        choices=endpoint_choices,
+                        value=DEFAULT_ENDPOINT_KEY,
+                    )
+                    api_base_box = gr.Textbox(
+                        label="API base URL",
+                        value=DEFAULT_API_BASE_URL,
+                        placeholder="http://localhost:8000",
+                    )
+
+                    # ── Generation (sampling)
+                    with gr.Accordion("Generation", open=True):
+                        temperature_slider = gr.Slider(
+                            label="Temperature", minimum=0.0, maximum=2.0, step=0.1,
+                            value=defaults.get("temperature", 0.7),
+                        )
+                        top_p_slider = gr.Slider(
+                            label="Top-p", minimum=0.0, maximum=1.0, step=0.01,
+                            value=defaults.get("top_p", 1.0),
+                        )
+                        max_tokens_slider = gr.Slider(
+                            label="Max Tokens", minimum=1, maximum=4000, step=1,
+                            value=defaults.get("max_tokens", 512),
+                        )
+                        seed_text = gr.Textbox(label="Seed (optional)", placeholder="e.g. 42")
+
+                    # ── Prompting (system + delimiters)
+                    with gr.Accordion("Prompting", open=True):
+                        system_prompt_box = gr.Textbox(
+                            label="System prompt (optional)",
+                            placeholder="Add a system instruction to steer responses.",
+                            lines=2,
+                        )
+
+                        # Delimiters lives INSIDE this Prompting block
+                        with gr.Accordion("Delimiters", open=False):
+                            with gr.Accordion("What is a delimiter?", open=False):
+                                gr.Markdown(
+                                    "Delimiters mark clear **boundaries** in your prompt — separating instructions, "
+                                    "context, and responses. They help models understand structure, reduce prompt "
+                                    "injection risks, and make editing or parsing easier. Use code fences for snippets, "
+                                    "tags for templates, or custom tokens for advanced workflows."
+                                )
+                            delim_pair_dd = gr.Dropdown(
+                                choices=DELIMITER_CHOICES,
+                                value=DELIMITER_CHOICES[0],
+                                label="Delimiter style",
+                                interactive=True,
+                            )
+                            with gr.Row():
+                                custom_start_tb = gr.Textbox(
+                                    label="Custom start",
+                                    placeholder="e.g. [[[INSTRUCT]]]",
+                                    visible=False,
+                                )
+                                custom_end_tb = gr.Textbox(
+                                    label="Custom end",
+                                    placeholder="e.g. [[[/INSTRUCT]]]",
+                                    visible=False,
+                                )
+
+                            def _sync_delimiter_inputs(selected_style: str):
+                                definition = DELIMITER_DEFINITIONS.get(selected_style or "")
+                                if not definition:
+                                    return gr.update(visible=False), gr.update(visible=False)
+                                start_update = gr.update(
+                                    visible=definition.get("requires_start", False),
+                                    label=definition.get("start_label", "Custom start"),
+                                    placeholder=definition.get("start_placeholder", "e.g. [[[INSTRUCT]]]"),
+                                )
+                                end_update = gr.update(
+                                    visible=definition.get("requires_end", False),
+                                    label=definition.get("end_label", "Custom end"),
+                                    placeholder=definition.get("end_placeholder", "e.g. [[[/INSTRUCT]]]"),
+                                )
+                                return start_update, end_update
+
+                            delim_pair_dd.change(
+                                _sync_delimiter_inputs,
+                                inputs=[delim_pair_dd],
+                                outputs=[custom_start_tb, custom_end_tb],
+                                queue=False,
+                            )
+
+                            with gr.Row():
+                                insert_delim_btn = gr.Button("Insert pair at end", variant="secondary")
+                                wrap_all_btn = gr.Button("Wrap entire message", variant="secondary")
+
+                            # Pure-Python handlers; outputs -> the same user_input Textbox
+                            def _handle_insert_end(text, style, cs, ce):
+                                return _insert_pair_at_end(text, style, cs, ce)
+
+                            def _handle_wrap_all(text, style, cs, ce):
+                                return _wrap_entire_message(text, style, cs, ce)
+
+                            insert_delim_btn.click(
+                                _handle_insert_end,
+                                inputs=[user_input, delim_pair_dd, custom_start_tb, custom_end_tb],
+                                outputs=[user_input],
+                                queue=False,
+                            )
+                            wrap_all_btn.click(
+                                _handle_wrap_all,
+                                inputs=[user_input, delim_pair_dd, custom_start_tb, custom_end_tb],
+                                outputs=[user_input],
+                                queue=False,
+                            )
+
 
         submit_inputs = [
             user_input,
