@@ -77,6 +77,8 @@ CREATE TABLE IF NOT EXISTS app.runs (
   params_json       JSONB NOT NULL DEFAULT '{}'::jsonb,             -- temperature, top_p, tools
   variables_json    JSONB NOT NULL DEFAULT '[]'::jsonb,             -- templated vars used
   input_text        TEXT,                                           -- sanitized user input
+  system_prompt     TEXT,                                           -- system instructions applied to the run
+  context_prompt    TEXT,                                           -- supplemental context provided with the request
   output_text       TEXT,                                           -- sanitized final output
   output_preview    TEXT GENERATED ALWAYS AS
                      (left(coalesce(output_text,''), 400)) STORED,

@@ -58,12 +58,67 @@ def extract_input_text(messages: Any, max_length: int = 2000) -> Optional[str]:
     return None
 
 
+def _extract_first_message(
+    messages: Any,
+    *,
+    role: Optional[str],
+    prefix: Optional[str] = None,
+    strip_prefix: bool = False,
+    max_length: int = 4000,
+) -> Optional[str]:
+    try:
+        if isinstance(messages, list):
+            for msg in messages:
+                msg_role: Optional[str]
+                content: Any
+                if isinstance(msg, dict):
+                    msg_role = msg.get("role")
+                    content = msg.get("content")
+                else:
+                    msg_role = getattr(msg, "role", None)
+                    content = getattr(msg, "content", None)
+                if role and msg_role != role:
+                    continue
+                if not content:
+                    continue
+                if prefix:
+                    if not isinstance(content, str) or not content.startswith(prefix):
+                        continue
+                    content_value = content[len(prefix) :] if strip_prefix else content
+                else:
+                    content_value = content
+                if isinstance(content_value, str):
+                    return content_value[:max_length]
+                return None
+    except Exception:
+        pass
+    return None
+
+
+def extract_system_prompt(messages: Any, max_length: int = 4000) -> Optional[str]:
+    """Extract the first system prompt from the messages payload."""
+    return _extract_first_message(messages, role="system", max_length=max_length)
+
+
+def extract_context_prompt(messages: Any, max_length: int = 4000) -> Optional[str]:
+    """Extract the first CONTEXT user message."""
+    return _extract_first_message(
+        messages,
+        role="user",
+        prefix="CONTEXT:\n",
+        strip_prefix=True,
+        max_length=max_length,
+    )
+
+
 def log_run(
     trace_id: str,
     provider_key: str,
     model_id: str,
     messages: Any,
     params: Dict[str, Any],
+    system_prompt: Optional[str] = None,
+    context_prompt: Optional[str] = None,
     output_text: Optional[str] = None,
     prompt_tokens: Optional[int] = None,
     completion_tokens: Optional[int] = None,
@@ -102,6 +157,8 @@ def log_run(
         model_id: Model identifier (e.g., 'gpt', 'gemini')
         messages: Input messages (string or list)
         params: Model parameters (temperature, top_p, etc.)
+        system_prompt: System prompt/instructions applied to the run
+        context_prompt: Retrieved or supplemental context sent with the run
         output_text: Model output text
         prompt_tokens: Number of prompt tokens
         completion_tokens: Number of completion tokens
@@ -175,6 +232,8 @@ def log_run(
             params_json=params or {},
             variables_json=variables_json or [],
             input_text=extract_input_text(messages),
+            system_prompt=(system_prompt or extract_system_prompt(messages)),
+            context_prompt=(context_prompt or extract_context_prompt(messages)),
             output_text=output_text[:2000] if output_text else None,  # Truncate for preview
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -238,6 +297,8 @@ def get_run_by_id(run_id: int) -> Optional[Dict[str, Any]]:
             "params_json": run.params_json or {},
             "variables_json": run.variables_json or [],
             "input_text": run.input_text,
+            "system_prompt": run.system_prompt,
+            "context_prompt": run.context_prompt,
             "output_text": run.output_text,
             "output_preview": run.output_preview,
             "prompt_tokens": run.prompt_tokens,

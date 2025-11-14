@@ -123,7 +123,7 @@ models:
 
   # === Local vLLM adapters ===
   - id: llama
-    label: "Llama3.1-8B-Instruct-AWQ (vLLM)"
+    label: "Llama3.1-8B-Instruct-AWQ"
     provider: vllm
     model_path: "./storage/llama3.1-8b-awq"  # your local HF path or name
     server:
@@ -140,7 +140,7 @@ models:
     params_override: {}
 
   - id: qwen
-    label: "Qwen2.5-7B-Instruct-AWQ (vLLM)"
+    label: "Qwen2.5-7B-Instruct-AWQ "
     provider: vllm
     model_path: "Qwen/Qwen2.5-7B-Instruct-AWQ"  # your local HF path or name
     server:

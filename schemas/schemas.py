@@ -34,6 +34,7 @@ class ChatRequest(BaseModel):
     model_id: Annotated[str, Field(min_length=1, max_length=100)]
     messages: Union[str, List[ChatMessage]]
     params: ChatParams = ChatParams()
+    context_prompt: Optional[Annotated[str, Field(min_length=1, max_length=10000)]] = None
 
     @field_validator("provider_id", "model_id")
     @classmethod
@@ -92,6 +93,8 @@ class RunResponse(BaseModel):
     params_json: Dict[str, Any] = {}
     variables_json: List[Dict[str, Any]] = []
     input_text: Optional[str] = None
+    system_prompt: Optional[str] = None
+    context_prompt: Optional[str] = None
     output_text: Optional[str] = None
     output_preview: Optional[str] = None
     prompt_tokens: Optional[int] = None

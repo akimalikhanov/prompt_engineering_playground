@@ -28,6 +28,8 @@ class Run(Base):
     params_json = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     variables_json = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     input_text = Column(Text)
+    system_prompt = Column(Text)
+    context_prompt = Column(Text)
     output_text = Column(Text)
     output_preview = Column(Text, Computed("left(coalesce(output_text,''), 400)"))  # Generated column: first 400 chars of output_text
     

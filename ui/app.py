@@ -218,10 +218,13 @@ def _build_messages(
     user_message: str,
     history: List[Tuple[str, str]],
     system_prompt: Optional[str],
+    context_prompt: Optional[str],
 ) -> List[Dict[str, str]]:
     messages: List[Dict[str, str]] = []
     if system_prompt and system_prompt.strip():
         messages.append({"role": "system", "content": system_prompt.strip()})
+    if context_prompt and context_prompt.strip():
+        messages.append({"role": "user", "content": f"CONTEXT:\n{context_prompt.strip()}\n"})
     for past_user, past_assistant in history:
         if past_user:
             messages.append({"role": "user", "content": past_user})
@@ -270,6 +273,7 @@ def stream_chat(
     max_tokens: int,
     seed_input: Optional[str],
     system_prompt: Optional[str],
+    context_prompt: Optional[str],
     api_base_url: str,
 ) -> Tuple[List[Tuple[str, str]], str]:
     history = history or []
@@ -290,7 +294,7 @@ def stream_chat(
         return history, format_metrics_badges({}, None, None)
 
     provider_id = model_config["provider"]
-    payload_messages = _build_messages(user_message, history, system_prompt)
+    payload_messages = _build_messages(user_message, history, system_prompt, context_prompt)
 
     api_url = (api_base_url or DEFAULT_API_BASE_URL).strip()
     if not api_url:
@@ -312,6 +316,7 @@ def stream_chat(
         "model_id": model_config["id"],
         "messages": payload_messages,
         "params": params,
+        "context_prompt": context_prompt.strip() if context_prompt and context_prompt.strip() else None,
     }
 
     running_history = history + [(user_message, "")]
@@ -480,170 +485,248 @@ def _wrap_entire_message(current_text: str, style: str, cs: str, ce: str) -> str
     return f"{start}{current_text}\n{end}"
 
 
+# --- Helpers (moved out of build_demo) ---------------------------------------
+
+def sync_delimiter_inputs(selected_style: str):
+    definition = DELIMITER_DEFINITIONS.get(selected_style or "")
+    if not definition:
+        return gr.update(visible=False), gr.update(visible=False)
+
+    start_update = gr.update(
+        visible=definition.get("requires_start", False),
+        label=definition.get("start_label", "Custom start"),
+        placeholder=definition.get("start_placeholder", "e.g. [[[INSTRUCT]]]"),
+    )
+    end_update = gr.update(
+        visible=definition.get("requires_end", False),
+        label=definition.get("end_label", "Custom end"),
+        placeholder=definition.get("end_placeholder", "e.g. [[[/INSTRUCT]]]"),
+    )
+    return start_update, end_update
+
+
+def handle_insert_end(text, style, cs, ce):
+    return _insert_pair_at_end(text, style, cs, ce)
+
+
+def handle_wrap_all(text, style, cs, ce):
+    return _wrap_entire_message(text, style, cs, ce)
+
+
+def clear_chat_and_metrics():
+    return [], format_metrics_badges({}, None, None)
+
+
+def reset_textbox():
+    return ""
+
+
+def submit_chat_generator(*args):
+    for value in stream_chat(*args):
+        yield value
+
+
+# --- Main UI builder ---------------------------------------------------------
+
 def build_demo() -> gr.Blocks:
     models_choices = [
         (
-            f"{model['label']} ({model['provider']}/{model['id']})",
+            f"{model['label']} ({model['provider']})",
             model["id"],
         )
         for model in MODELS_DATA["models"]
     ]
     endpoint_choices = [
-        (
-            endpoint_cfg["label"],
-            endpoint_key,
-        )
+        (endpoint_cfg["label"], endpoint_key)
         for endpoint_key, endpoint_cfg in ENDPOINTS.items()
     ]
     defaults = MODELS_DATA["defaults"]
 
-    with gr.Blocks(css=BADGES_CSS, theme=gr.themes.Ocean(primary_hue="emerald"), title="Prompt Engineering Playground") as demo:
+    with gr.Blocks(
+        css=BADGES_CSS,
+        theme=gr.themes.Ocean(primary_hue="emerald"),
+        title="Prompt Engineering Playground",
+    ) as demo:
         gr.Markdown(
             "# Prompt Engineering Playground\n"
-            "Interact with the various LLM models via a lightweight Gradio UI."
+            "Interact with various LLM models via a lightweight Gradio UI."
         )
 
         with gr.Row():
-            with gr.Column(scale=2.75):
+            # --- Left: chat area ------------------------------------------------
+            with gr.Column(scale=3):
                 chatbot = gr.Chatbot(
                     label="Chat",
                     height=520,
                     bubble_full_width=False,
                 )
                 user_input = gr.Textbox(
-                    label="Your message (Enter for new line, Shift+Enter to send)",
+                    label="Your message",
                     placeholder="Ask something...",
                     autofocus=True,
                     lines=3,
                     elem_id="prompt-input",
                 )
                 with gr.Row():
-                    send_button = gr.Button("Send", variant="primary", elem_id="send-button")
+                    send_button = gr.Button(
+                        "Send", variant="primary", elem_id="send-button"
+                    )
                     clear_button = gr.Button("Clear", variant="secondary")
 
                 metrics_display = gr.Markdown(
                     value=format_metrics_badges({}, None, None),
                     label="Metrics",
                 )
-            with gr.Column(scale=1.25, min_width=420):
 
+            # --- Right: settings / parameters ----------------------------------
+            with gr.Column(scale=2, min_width=420):
                 with gr.Accordion("Parameters", open=True):
-                    # ── General
-                    model_dropdown = gr.Dropdown(
-                        label="Model",
-                        choices=models_choices,
-                        value=DEFAULT_MODEL_ID,
-                    )
-                    endpoint_dropdown = gr.Dropdown(
-                        label="Endpoint",
-                        choices=endpoint_choices,
-                        value=DEFAULT_ENDPOINT_KEY,
-                    )
-                    api_base_box = gr.Textbox(
-                        label="API base URL",
-                        value=DEFAULT_API_BASE_URL,
-                        placeholder="http://localhost:8000",
-                    )
-
-                    # ── Generation (sampling)
-                    with gr.Accordion("Generation", open=True):
-                        temperature_slider = gr.Slider(
-                            label="Temperature", minimum=0.0, maximum=2.0, step=0.1,
-                            value=defaults.get("temperature", 0.7),
+                    # General
+                    with gr.Row():
+                        model_dropdown = gr.Dropdown(
+                            label="Model",
+                            choices=models_choices,
+                            value=DEFAULT_MODEL_ID,
                         )
-                        top_p_slider = gr.Slider(
-                            label="Top-p", minimum=0.0, maximum=1.0, step=0.01,
-                            value=defaults.get("top_p", 1.0),
-                        )
-                        max_tokens_slider = gr.Slider(
-                            label="Max Tokens", minimum=1, maximum=4000, step=1,
-                            value=defaults.get("max_tokens", 512),
-                        )
-                        seed_text = gr.Textbox(label="Seed (optional)", placeholder="e.g. 42")
-
-                    # ── Prompting (system + delimiters)
-                    with gr.Accordion("Prompting", open=True):
-                        system_prompt_box = gr.Textbox(
-                            label="System prompt (optional)",
-                            placeholder="Add a system instruction to steer responses.",
-                            lines=2,
+                        endpoint_dropdown = gr.Dropdown(
+                            label="Endpoint",
+                            choices=endpoint_choices,
+                            value=DEFAULT_ENDPOINT_KEY,
                         )
 
-                        # Delimiters lives INSIDE this Prompting block
-                        with gr.Accordion("Delimiters", open=False):
-                            with gr.Accordion("What is a delimiter?", open=False):
+                    with gr.Accordion("API settings", open=False):
+                        api_base_box = gr.Textbox(
+                            label="API base URL",
+                            value=DEFAULT_API_BASE_URL,
+                            placeholder="http://localhost:8000",
+                        )
+
+                    # Tabs for logical grouping
+                    with gr.Tabs():
+                        # --- Generation tab ------------------------------------
+                        with gr.Tab("Generation"):
+                            gr.Markdown(
+                                "Control sampling behavior. Lower temperature/top-p "
+                                "for more deterministic outputs; higher for more creative."
+                            )
+                            with gr.Row():
+                                temperature_slider = gr.Slider(
+                                    label="Temperature",
+                                    minimum=0.0,
+                                    maximum=2.0,
+                                    step=0.1,
+                                    value=defaults.get("temperature", 0.7),
+                                )
+                                top_p_slider = gr.Slider(
+                                    label="Top-p",
+                                    minimum=0.0,
+                                    maximum=1.0,
+                                    step=0.01,
+                                    value=defaults.get("top_p", 1.0),
+                                )
+                            with gr.Row():
+                                max_tokens_slider = gr.Slider(
+                                    label="Max tokens",
+                                    minimum=1,
+                                    maximum=4000,
+                                    step=1,
+                                    value=defaults.get("max_tokens", 512),
+                                )
+                                seed_text = gr.Textbox(
+                                    label="Seed (optional)",
+                                    placeholder="e.g. 42",
+                                )
+
+                        # --- Prompting tab -------------------------------------
+                        with gr.Tab("Prompting"):
+                            gr.Markdown(
+                                "Use system prompt for **high-level behavior**, "
+                                "and Context to **ground answers in facts**."
+                            )
+                            system_prompt_box = gr.Textbox(
+                                label="System prompt (optional)",
+                                placeholder="Add global instructions, tone, or role.",
+                                lines=3,
+                            )
+
+                            context_box = gr.Textbox(
+                                label="Context (optional)",
+                                placeholder=(
+                                    "Add retrieved facts or reference material here. "
+                                    "This will be sent as a special `CONTEXT:` user "
+                                    "message before your main question."
+                                ),
+                                lines=3,
+                            )
+
+                            with gr.Accordion("Delimiters (advanced)", open=False):
                                 gr.Markdown(
-                                    "Delimiters mark clear **boundaries** in your prompt — separating instructions, "
-                                    "context, and responses. They help models understand structure, reduce prompt "
-                                    "injection risks, and make editing or parsing easier. Use code fences for snippets, "
-                                    "tags for templates, or custom tokens for advanced workflows."
-                                )
-                            delim_pair_dd = gr.Dropdown(
-                                choices=DELIMITER_CHOICES,
-                                value=DELIMITER_CHOICES[0],
-                                label="Delimiter style",
-                                interactive=True,
-                            )
-                            with gr.Row():
-                                custom_start_tb = gr.Textbox(
-                                    label="Custom start",
-                                    placeholder="e.g. [[[INSTRUCT]]]",
-                                    visible=False,
-                                )
-                                custom_end_tb = gr.Textbox(
-                                    label="Custom end",
-                                    placeholder="e.g. [[[/INSTRUCT]]]",
-                                    visible=False,
+                                    "Delimiters create clear **boundaries** in prompts "
+                                    "between instructions, context, and answers. "
+                                    "They help parsing and reduce prompt injection risks."
                                 )
 
-                            def _sync_delimiter_inputs(selected_style: str):
-                                definition = DELIMITER_DEFINITIONS.get(selected_style or "")
-                                if not definition:
-                                    return gr.update(visible=False), gr.update(visible=False)
-                                start_update = gr.update(
-                                    visible=definition.get("requires_start", False),
-                                    label=definition.get("start_label", "Custom start"),
-                                    placeholder=definition.get("start_placeholder", "e.g. [[[INSTRUCT]]]"),
+                                delim_pair_dd = gr.Dropdown(
+                                    choices=DELIMITER_CHOICES,
+                                    value=DELIMITER_CHOICES[0],
+                                    label="Delimiter style",
+                                    interactive=True,
                                 )
-                                end_update = gr.update(
-                                    visible=definition.get("requires_end", False),
-                                    label=definition.get("end_label", "Custom end"),
-                                    placeholder=definition.get("end_placeholder", "e.g. [[[/INSTRUCT]]]"),
+                                with gr.Row():
+                                    custom_start_tb = gr.Textbox(
+                                        label="Custom start",
+                                        placeholder="e.g. [[[INSTRUCT]]]",
+                                        visible=False,
+                                    )
+                                    custom_end_tb = gr.Textbox(
+                                        label="Custom end",
+                                        placeholder="e.g. [[[/INSTRUCT]]]",
+                                        visible=False,
+                                    )
+
+                                delim_pair_dd.change(
+                                    sync_delimiter_inputs,
+                                    inputs=[delim_pair_dd],
+                                    outputs=[custom_start_tb, custom_end_tb],
+                                    queue=False,
                                 )
-                                return start_update, end_update
 
-                            delim_pair_dd.change(
-                                _sync_delimiter_inputs,
-                                inputs=[delim_pair_dd],
-                                outputs=[custom_start_tb, custom_end_tb],
-                                queue=False,
-                            )
+                                with gr.Row():
+                                    insert_delim_btn = gr.Button(
+                                        "Insert at end", variant="secondary"
+                                    )
+                                    wrap_all_btn = gr.Button(
+                                        "Wrap all text", variant="secondary"
+                                    )
 
-                            with gr.Row():
-                                insert_delim_btn = gr.Button("Insert pair at end", variant="secondary")
-                                wrap_all_btn = gr.Button("Wrap entire message", variant="secondary")
+                                insert_delim_btn.click(
+                                    handle_insert_end,
+                                    inputs=[
+                                        user_input,
+                                        delim_pair_dd,
+                                        custom_start_tb,
+                                        custom_end_tb,
+                                    ],
+                                    outputs=[user_input],
+                                    queue=False,
+                                )
+                                wrap_all_btn.click(
+                                    handle_wrap_all,
+                                    inputs=[
+                                        user_input,
+                                        delim_pair_dd,
+                                        custom_start_tb,
+                                        custom_end_tb,
+                                    ],
+                                    outputs=[user_input],
+                                    queue=False,
+                                )
 
-                            # Pure-Python handlers; outputs -> the same user_input Textbox
-                            def _handle_insert_end(text, style, cs, ce):
-                                return _insert_pair_at_end(text, style, cs, ce)
+                        # --- (Optional) More tabs later: Tools / Functions / RAG etc.
+                        # with gr.Tab("Advanced"):
+                        #     ...
 
-                            def _handle_wrap_all(text, style, cs, ce):
-                                return _wrap_entire_message(text, style, cs, ce)
-
-                            insert_delim_btn.click(
-                                _handle_insert_end,
-                                inputs=[user_input, delim_pair_dd, custom_start_tb, custom_end_tb],
-                                outputs=[user_input],
-                                queue=False,
-                            )
-                            wrap_all_btn.click(
-                                _handle_wrap_all,
-                                inputs=[user_input, delim_pair_dd, custom_start_tb, custom_end_tb],
-                                outputs=[user_input],
-                                queue=False,
-                            )
-
-
+        # --- Wiring submissions -----------------------------------------------
         submit_inputs = [
             user_input,
             chatbot,
@@ -654,22 +737,24 @@ def build_demo() -> gr.Blocks:
             max_tokens_slider,
             seed_text,
             system_prompt_box,
+            context_box,
             api_base_box,
         ]
-
         submit_outputs = [chatbot, metrics_display]
 
         user_input.submit(stream_chat, inputs=submit_inputs, outputs=submit_outputs, queue=True)
-        user_input.submit(lambda: "", inputs=None, outputs=user_input, queue=False)
+        user_input.submit(reset_textbox, inputs=None, outputs=user_input, queue=False)
 
-        def submit_chat(*args):
-            for value in stream_chat(*args):
-                yield value
-        send_button.click(submit_chat, inputs=submit_inputs, outputs=submit_outputs, queue=True)
-        send_button.click(lambda: "", inputs=None, outputs=user_input, queue=False)
+        send_button.click(
+            submit_chat_generator,
+            inputs=submit_inputs,
+            outputs=submit_outputs,
+            queue=True,
+        )
+        send_button.click(reset_textbox, inputs=None, outputs=user_input, queue=False)
 
         clear_button.click(
-            lambda: ([], format_metrics_badges({}, None, None)),
+            clear_chat_and_metrics,
             inputs=None,
             outputs=[chatbot, metrics_display],
             queue=False,
@@ -684,5 +769,5 @@ demo = build_demo()
 
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(server_name="0.0.0.0", server_port=7860, share=True)
 

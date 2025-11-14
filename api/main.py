@@ -140,6 +140,7 @@ def chat(body: ChatRequest):
             output_text=result["text"],
             metrics=result.get("metrics", {}),
             status="ok",
+            context_prompt=body.context_prompt,
         )
         return ChatResponse.model_validate(final_res)
 
@@ -153,6 +154,7 @@ def chat(body: ChatRequest):
             status="error",
             error_type=type(e).__name__,
             error_message=str(e),
+            context_prompt=body.context_prompt,
         )
         raise
 
@@ -214,6 +216,7 @@ def chat_stream(body: ChatRequest):
                     accumulated_text=accumulated_text,
                     metrics=metrics,
                     status="ok",
+                    context_prompt=body.context_prompt,
                 )
             except Exception as e:
                 # Log error
@@ -227,6 +230,7 @@ def chat_stream(body: ChatRequest):
                     status="error",
                     error_type=type(e).__name__,
                     error_message=str(e),
+                    context_prompt=body.context_prompt,
                 )
                 raise
 
@@ -243,6 +247,7 @@ def chat_stream(body: ChatRequest):
             status="error",
             error_type=type(e).__name__,
             error_message=str(e),
+            context_prompt=body.context_prompt,
         )
         raise
 
@@ -303,6 +308,7 @@ def chat_stream_sse(body: ChatRequest):
                     accumulated_text=accumulated_text,
                     metrics=metrics,
                     status="ok",
+                    context_prompt=body.context_prompt,
                 )
             except Exception as e:
                 # Log error
@@ -316,6 +322,7 @@ def chat_stream_sse(body: ChatRequest):
                     status="error",
                     error_type=type(e).__name__,
                     error_message=str(e),
+                    context_prompt=body.context_prompt,
                 )
                 raise
 
@@ -340,6 +347,7 @@ def chat_stream_sse(body: ChatRequest):
             status="error",
             error_type=type(e).__name__,
             error_message=str(e),
+            context_prompt=body.context_prompt,
         )
         raise
 
