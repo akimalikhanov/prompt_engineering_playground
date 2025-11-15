@@ -5,7 +5,7 @@ from utils.errors import (_get_status_code, \
                     prettify_openai_error, \
                     BackendError)
 from utils.retry import call_with_retry
-from config.load_models_config import _load_models_config
+from config.load_configs import _load_models_config
 import time
 import logging
 

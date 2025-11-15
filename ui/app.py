@@ -2,12 +2,12 @@ import json
 import os
 import time
 from functools import lru_cache
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Generator, List, Optional, Tuple
 
 import gradio as gr
 import httpx
 
-from config.load_models_config import _load_models_config
+from config.load_configs import _load_models_config, _load_gradio_templates
 
 
 @lru_cache(maxsize=1)
@@ -20,17 +20,13 @@ def _load_models() -> Dict[str, Any]:
                 "id": model_cfg["id"],
                 "label": model_cfg["label"],
                 "provider": model_cfg["provider"],
+                "params_override": model_cfg.get("params_override", {}),
             }
         )
     defaults = config.get("defaults", {}).get("params", {})
     return {
         "models": models,
-        "defaults": {
-            "temperature": defaults.get("temperature", 0.7),
-            "top_p": defaults.get("top_p", 1.0),
-            "max_tokens": defaults.get("max_tokens", 512),
-            "seed": defaults.get("seed"),
-        },
+        "defaults": defaults,
     }
 
 
@@ -164,54 +160,69 @@ def _resolve_xml_delimiter(cs: str, _: str) -> tuple[str, str]:
     return f"<{tag}>\n", f"\n</{tag}>"
 
 
-DELIMITER_DEFINITIONS: Dict[str, Dict[str, Any]] = {
-    # Baseline markdown-style fences
-    "``` … ```": {"start": "```\n", "end": "\n```"},
-    "\"\"\" … \"\"\"": {"start": "\"\"\"\n", "end": "\n\"\"\""},
-    "~~~ … ~~~": {"start": "~~~\n", "end": "\n~~~"},
-
-    # Dynamic helpers
-    "Markdown ```{lang} … ```": {
-        "resolver": _resolve_markdown_delimiter,
-        "requires_start": True,
-        "start_label": "Language",
-        "start_placeholder": "e.g. json, python, bash",
-    },
-    "XML <tag> … </tag>": {
-        "resolver": _resolve_xml_delimiter,
-        "requires_start": True,
-        "start_label": "Tag name",
-        "start_placeholder": "e.g. instruction",
-    },
-
-    # Comment / heredoc styles
-    "<!-- … -->": {"start": "<!--\n", "end": "\n-->"},
-    "/* … */": {"start": "/*\n", "end": "\n*/"},
-    "<<EOF … EOF (heredoc)": {"start": "<<EOF\n", "end": "\nEOF"},  # fixed label
-
-    # Front matter
-    "--- … --- (YAML front matter)": {"start": "---\n", "end": "\n---"},
-
-    # Model templates
-    "[INST] … [/INST]": {"start": "[INST]\n", "end": "\n[/INST]"},
-    "<|im_start|> … <|im_end|>": {"start": "<|im_start|>\n", "end": "\n<|im_end|>"},
-
-    # Section headers
-    "### BEGIN … ### END": {"start": "### BEGIN\n", "end": "\n### END"},
-
-    # Flexible customs
-    "Custom…": {
-        "resolver": _resolve_custom_delimiter,
-        "requires_start": True,
-        "requires_end": True,
-        "start_label": "Custom start token",
-        "start_placeholder": "e.g. [[[INSTRUCT]]]",
-        "end_label": "Custom end token",
-        "end_placeholder": "e.g. [[[/INSTRUCT]]]",
-    },
+# Resolver functions mapped by type
+RESOLVER_FUNCTIONS: Dict[str, Any] = {
+    "markdown": _resolve_markdown_delimiter,
+    "xml": _resolve_xml_delimiter,
+    "custom": _resolve_custom_delimiter,
 }
 
+
+@lru_cache(maxsize=1)
+def _load_delimiter_definitions() -> Dict[str, Dict[str, Any]]:
+    """Load delimiter definitions from YAML and map resolver types to functions."""
+    templates_config = _load_gradio_templates()
+    delimiters_raw = templates_config.get("delimiters", {})
+    
+    # Process each delimiter definition
+    delimiter_definitions: Dict[str, Dict[str, Any]] = {}
+    for key, value in delimiters_raw.items():
+        definition = dict(value)  # Make a copy
+        
+        # If there's a resolver_type, map it to the actual resolver function
+        resolver_type = definition.pop("resolver_type", None)
+        if resolver_type:
+            resolver_func = RESOLVER_FUNCTIONS.get(resolver_type)
+            if resolver_func:
+                definition["resolver"] = resolver_func
+            else:
+                # Fallback: if resolver type not found, treat as static
+                print(f"Warning: Unknown resolver_type '{resolver_type}' for delimiter '{key}'")
+        
+        delimiter_definitions[key] = definition
+    
+    return delimiter_definitions
+
+
+DELIMITER_DEFINITIONS: Dict[str, Dict[str, Any]] = _load_delimiter_definitions()
+
 DELIMITER_CHOICES: List[str] = list(DELIMITER_DEFINITIONS.keys())
+
+
+@lru_cache(maxsize=1)
+def _load_response_schema_templates() -> Dict[str, Dict[str, Any]]:
+    """Load response schema templates from YAML config."""
+    templates_config = _load_gradio_templates()
+    templates_raw = templates_config.get("response_schema_templates", [])
+    templates_lookup: Dict[str, Dict[str, Any]] = {}
+    
+    for template in templates_raw:
+        label = template.get("label", template.get("id", "Unknown"))
+        templates_lookup[label] = template
+    
+    # Create a lookup dictionary by label, with "Custom..." option
+    templates_lookup.update({
+        "Custom...": {
+            "id": "custom",
+            "label": "Custom...",
+            "custom": True,
+        }
+    })
+    return templates_lookup
+
+
+RESPONSE_SCHEMA_TEMPLATES: Dict[str, Dict[str, Any]] = _load_response_schema_templates()
+RESPONSE_SCHEMA_CHOICES: List[str] = list(RESPONSE_SCHEMA_TEMPLATES.keys())
 
 
 def _build_messages(
@@ -253,6 +264,74 @@ def _coerce_seed(seed_text: Optional[str]) -> Optional[int]:
     return max(0, seed_val)
 
 
+def _build_response_format(
+    mode: str,
+    strict: bool,
+    schema_code: Optional[str],
+    schema_template_label: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Build response_format dict from UI inputs.
+    
+    Expected structure for json_schema type:
+    {
+        "type": "json_schema",
+        "json_schema": {
+            "schema": {...},  # The actual JSON schema
+            "strict": true,
+            "name": "SchemaName"  # Required by OpenAI
+        }
+    }
+    """
+    if mode == "None" or not mode:
+        return None
+    
+    if mode == "JSON object":
+        return {"type": "json_object"}
+    
+    if mode == "JSON schema":
+        if not schema_code or not schema_code.strip():
+            return None
+        try:
+            # Parse and validate the JSON schema
+            schema_text = schema_code.strip()
+            json_schema_dict = json.loads(schema_text)
+            
+            # Validate it's actually a dict/object
+            if not isinstance(json_schema_dict, dict):
+                print(f"⚠️ JSON schema must be an object, got: {type(json_schema_dict)}")
+                return None
+            
+            # Extract schema name from template if available
+            schema_name = None
+            if schema_template_label and schema_template_label != "Custom...":
+                template = RESPONSE_SCHEMA_TEMPLATES.get(schema_template_label)
+                if template:
+                    json_schema_config = template.get("json_schema", {})
+                    schema_name = json_schema_config.get("name")
+            
+            # Build json_schema structure - name is required by OpenAI
+            # Use template name if available, otherwise default to "CustomSchema"
+            json_schema_obj = {
+                "schema": json_schema_dict,
+                "strict": strict,
+                "name": schema_name if schema_name else "CustomSchema",  # Required by OpenAI API
+            }
+            
+            # Wrap in the expected structure
+            return {
+                "type": "json_schema",
+                "json_schema": json_schema_obj,
+            }
+        except json.JSONDecodeError as e:
+            # Log the error so user can see it in console/logs
+            error_msg = f"⚠️ Invalid JSON schema: {str(e)}"
+            print(error_msg)
+            # Still return None to skip invalid schema
+            return None
+    
+    return None
+
+
 def _normalize_selection(value: Any) -> Optional[str]:
     if isinstance(value, str):
         return value
@@ -275,23 +354,55 @@ def stream_chat(
     system_prompt: Optional[str],
     context_prompt: Optional[str],
     api_base_url: str,
-) -> Tuple[List[Tuple[str, str]], str]:
+    response_mode: str,
+    strict_schema: bool,
+    schema_code: Optional[str],
+    schema_template: Optional[str] = None,
+) -> Generator[Tuple[List[Tuple[str, str]], str], None, None]:
+    """Stream chat responses. Always yields values, even for errors."""
     history = history or []
 
     if not user_message or not user_message.strip():
-        return history, format_metrics_badges({}, None, None)
+        yield history, format_metrics_badges({}, None, None)
+        return
+
+    # Validate response_format early and show error in UI if needed
+    if response_mode == "JSON schema":
+        if not schema_code or not schema_code.strip():
+            error_msg = "⚠️ JSON schema mode requires a schema. Please enter a valid JSON schema."
+            history = history + [(user_message, error_msg)]
+            yield history, format_metrics_badges({}, None, None)
+            return
+        try:
+            # Validate JSON before proceeding
+            parsed_schema = json.loads(schema_code.strip())
+            # Also validate it's a dict
+            if not isinstance(parsed_schema, dict):
+                error_msg = f"⚠️ JSON schema must be an object/dict, got {type(parsed_schema).__name__}."
+                history = history + [(user_message, error_msg)]
+                yield history, format_metrics_badges({}, None, None)
+                return
+        except json.JSONDecodeError as e:
+            error_msg = f"⚠️ Invalid JSON schema: {str(e)}\n\nPlease check your JSON syntax (missing brackets, commas, etc.)."
+            history = history + [(user_message, error_msg)]
+            yield history, format_metrics_badges({}, None, None)
+            return
 
     normalized_choice = _normalize_selection(model_choice)
     model_config = MODEL_LOOKUP.get(normalized_choice) if normalized_choice else None
     if not model_config:
-        history = history + [(user_message, "⚠️ Unknown model selection.")]
-        return history, format_metrics_badges({}, None, None)
+        error_msg = "⚠️ Unknown model selection."
+        history = history + [(user_message, error_msg)]
+        yield history, format_metrics_badges({}, None, None)
+        return
 
     endpoint_key = _normalize_selection(endpoint_choice)
     endpoint_cfg = ENDPOINTS.get(endpoint_key) if endpoint_key else None
     if not endpoint_cfg:
-        history = history + [(user_message, "⚠️ Unknown endpoint selection.")]
-        return history, format_metrics_badges({}, None, None)
+        error_msg = "⚠️ Unknown endpoint selection."
+        history = history + [(user_message, error_msg)]
+        yield history, format_metrics_badges({}, None, None)
+        return
 
     provider_id = model_config["provider"]
     payload_messages = _build_messages(user_message, history, system_prompt, context_prompt)
@@ -310,6 +421,17 @@ def stream_chat(
     seed_value = _coerce_seed(seed_input)
     if seed_value is not None:
         params["seed"] = seed_value
+
+    # Handle response_format
+    schema_template_label = _normalize_selection(schema_template) if schema_template else None
+    response_format = _build_response_format(response_mode, strict_schema, schema_code, schema_template_label)
+    if response_format is not None:
+        params["response_format"] = response_format
+        # Debug: log what we're sending
+        print(f"DEBUG: Adding response_format to params: {json.dumps(response_format, indent=2)}")
+    else:
+        # Debug: log why response_format is None
+        print(f"DEBUG: response_format is None (mode={response_mode}, schema_code={'present' if schema_code else 'None'})")
 
     request_body = {
         "provider_id": provider_id,
@@ -533,28 +655,160 @@ def clear_chat_and_metrics():
     return [], format_metrics_badges({}, None, None)
 
 
+def on_schema_template_change(template_label: str, current_strict: bool) -> Tuple[str, bool]:
+    """Handle schema template selection.
+    
+    When a template is selected, convert its schema to JSON and update the code editor.
+    For "Custom", return empty template.
+    
+    Args:
+        template_label: Selected template label from dropdown
+        current_strict: Current value of strict checkbox
+        
+    Returns:
+        Tuple of (schema_json_string, strict_checkbox_value)
+    """
+    if not template_label or template_label == "Custom...":
+        # Return empty template for custom
+        default_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {},
+            "required": []
+        }
+        return json.dumps(default_schema, indent=2), current_strict
+    
+    template = RESPONSE_SCHEMA_TEMPLATES.get(template_label)
+    if not template:
+        # Fallback if template not found
+        default_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {},
+            "required": []
+        }
+        return json.dumps(default_schema, indent=2), current_strict
+    
+    # Extract schema from template (it's already a dict from YAML)
+    json_schema_config = template.get("json_schema", {})
+    schema_dict = json_schema_config.get("schema", {})
+    
+    # Convert dict to JSON string with indentation
+    schema_json = json.dumps(schema_dict, indent=2)
+    
+    # Keep current strict value unchanged
+    return schema_json, current_strict
+
+
 def reset_textbox():
     return ""
 
 
-def update_temperature_for_model(model_choice: Any):
-    """Update temperature slider based on selected model.
+def get_effective_params_for_model(model_id: Optional[str]) -> Dict[str, Any]:
+    """Get effective parameters for a model by merging defaults with params_override.
     
-    For o4-mini models, set temperature to 1.0 and disable the slider.
-    For other models, enable the slider with default value.
+    Args:
+        model_id: The model ID, or None to get just defaults
+        
+    Returns:
+        Dict with effective parameter values (temperature, top_p, max_tokens, seed, etc.)
+    """
+    # Start with defaults from models.yaml
+    effective = MODELS_DATA.get("defaults", {}).copy()
+    
+    # Apply model-specific overrides if any
+    if model_id:
+        model_config = MODEL_LOOKUP.get(model_id)
+        if model_config:
+            params_override = model_config.get("params_override", {})
+            if params_override:
+                effective.update(params_override)
+    
+    return effective
+
+
+def _get_model_special_behavior(model_id: str) -> Dict[str, Any]:
+    """Get special behavior configuration for a model (e.g., fixed parameters, disabled UI).
+    
+    This centralizes special-case handling for models that have constraints.
+    Returns a dict mapping parameter names to their special behavior config.
+    """
+    special_behaviors: Dict[str, Dict[str, Any]] = {}
+    
+    # Special handling for o4-mini: temperature must be 1.0 and cannot be changed
+    if model_id == "gpt-o4-mini":
+        special_behaviors["temperature"] = {
+            "value": 1.0,
+            "interactive": False,
+            "label": "Temperature (fixed at 1.0 for o4-mini)"
+        }
+    
+    return special_behaviors
+
+
+def _get_param_values_for_model(model_id: Optional[str]) -> Dict[str, Any]:
+    """Get parameter values for a model, including special behaviors.
+    
+    Returns a dict with parameter values and UI properties (like interactive, label).
+    Used by both initialization and update functions.
+    """
+    defaults = MODELS_DATA.get("defaults", {})
+    effective = get_effective_params_for_model(model_id)
+    special_behaviors = _get_model_special_behavior(model_id) if model_id else {}
+    
+    params = {}
+    
+    # Temperature
+    temp_value = effective.get("temperature", defaults.get("temperature"))
+    temp_special = special_behaviors.get("temperature", {})
+    if "value" in temp_special:
+        temp_value = temp_special["value"]
+    params["temperature"] = {
+        "value": temp_value,
+        "interactive": temp_special.get("interactive", True),
+        "label": temp_special.get("label", "Temperature")
+    }
+    
+    # Top-p
+    params["top_p"] = {
+        "value": effective.get("top_p", defaults.get("top_p"))
+    }
+    
+    # Max tokens
+    max_tokens_value = effective.get("max_tokens", defaults.get("max_tokens"))
+    if max_tokens_value is not None:
+        max_tokens_value = int(max_tokens_value)
+    params["max_tokens"] = {"value": max_tokens_value}
+    
+    # Seed
+    seed_value = effective.get("seed", defaults.get("seed"))
+    params["seed"] = {"value": str(seed_value) if seed_value is not None else ""}
+    
+    return params
+
+
+def update_params_for_model(model_choice: Any):
+    """Update all parameter UI components based on selected model.
+    
+    This is a generic function that:
+    1. Looks up the model's params_override from models.yaml
+    2. Merges with defaults to get effective params
+    3. Applies special behavior rules (e.g., fixed values, disabled UI)
+    4. Returns updates for all parameter UI components
+    
+    Returns:
+        Tuple of gr.update() calls for all parameter UI components in order:
+        (temperature_slider, top_p_slider, max_tokens_slider, seed_textbox)
     """
     normalized_choice = _normalize_selection(model_choice)
-    model_config = MODEL_LOOKUP.get(normalized_choice) if normalized_choice else None
+    params = _get_param_values_for_model(normalized_choice)
     
-    if model_config and normalized_choice == "gpt-o4-mini":
-        # o4-mini only supports temperature=1
-        return gr.update(value=1.0, interactive=False, 
-                        label="Temperature (fixed at 1.0 for o4-mini)")
-    else:
-        # Other models can use any temperature
-        default_temp = MODELS_DATA["defaults"].get("temperature", 0.7)
-        return gr.update(value=default_temp, interactive=True, 
-                        label="Temperature")
+    return (
+        gr.update(**params["temperature"]),
+        gr.update(value=params["top_p"]["value"]),
+        gr.update(value=params["max_tokens"]["value"]),
+        gr.update(value=params["seed"]["value"]),
+    )
 
 
 def submit_chat_generator(*args):
@@ -646,29 +900,24 @@ def build_demo() -> gr.Blocks:
                                 "for more deterministic outputs; higher for more creative."
                             )
                             with gr.Row():
-                                # Initialize temperature based on default model
-                                initial_temp = defaults.get("temperature", 0.7)
-                                initial_label = "Temperature"
-                                initial_interactive = True
-                                if DEFAULT_MODEL_ID == "gpt-o4-mini":
-                                    initial_temp = 1.0
-                                    initial_label = "Temperature (fixed at 1.0 for o4-mini)"
-                                    initial_interactive = False
+                                # Initialize parameters based on default model (merge defaults with params_override)
+                                initial_params = _get_param_values_for_model(DEFAULT_MODEL_ID)
                                 
                                 temperature_slider = gr.Slider(
-                                    label=initial_label,
+                                    label=initial_params["temperature"]["label"],
                                     minimum=0.0,
                                     maximum=2.0,
                                     step=0.1,
-                                    value=initial_temp,
-                                    interactive=initial_interactive,
+                                    value=initial_params["temperature"]["value"],
+                                    interactive=initial_params["temperature"]["interactive"],
                                 )
+                                
                                 top_p_slider = gr.Slider(
                                     label="Top-p",
                                     minimum=0.0,
                                     maximum=1.0,
                                     step=0.01,
-                                    value=defaults.get("top_p", 1.0),
+                                    value=initial_params["top_p"]["value"],
                                 )
                             with gr.Row():
                                 max_tokens_slider = gr.Slider(
@@ -676,11 +925,84 @@ def build_demo() -> gr.Blocks:
                                     minimum=1,
                                     maximum=4000,
                                     step=1,
-                                    value=defaults.get("max_tokens", 512),
+                                    value=initial_params["max_tokens"]["value"],
                                 )
+                                
                                 seed_text = gr.Textbox(
                                     label="Seed (optional)",
                                     placeholder="e.g. 42",
+                                    value=initial_params["seed"]["value"],
+                                )
+
+                            # --- Structured output (response_format) ------------
+                            with gr.Accordion("Structured output (optional)", open=False):
+                                gr.Markdown(
+                                    "Use `response_format` to force JSON output.\n\n"
+                                    "- **None**: normal text response\n"
+                                    "- **JSON object**: any valid JSON object\n"
+                                    "- **JSON schema**: enforce a specific JSON structure"
+                                )
+
+                                response_mode_dd = gr.Dropdown(
+                                    label="Mode",
+                                    choices=["None", "JSON object", "JSON schema"],
+                                    value="None",
+                                )
+
+                                strict_ckb = gr.Checkbox(
+                                    label="Strict schema (JSON only, no extra fields)",
+                                    value=True,
+                                    visible=False,
+                                )
+
+                                schema_template_dd = gr.Dropdown(
+                                    label="Schema template",
+                                    choices=RESPONSE_SCHEMA_CHOICES,
+                                    value="Custom...",
+                                    visible=False,
+                                    interactive=True,
+                                )
+
+                                schema_code = gr.Code(
+                                    label="JSON schema",
+                                    language="json",
+                                    value='{\n  "type": "object",\n  "additionalProperties": false,\n'
+                                          '  "properties": {},\n  "required": []\n}',
+                                    visible=False,
+                                    lines=12,
+                                    max_lines=20,
+                                )
+
+                                # Small change handler to show/hide fields when mode changes
+                                def on_response_mode_change(mode):
+                                    show_schema = mode == "JSON schema"
+                                    return (
+                                        gr.update(visible=show_schema),  # strict_ckb
+                                        gr.update(visible=show_schema),  # schema_template_dd
+                                        gr.update(visible=show_schema),  # schema_code
+                                    )
+
+                                response_mode_dd.change(
+                                    on_response_mode_change,
+                                    inputs=[response_mode_dd],
+                                    outputs=[strict_ckb, schema_template_dd, schema_code],
+                                    queue=False,
+                                )
+
+                                # Handler for schema template selection
+                                def on_schema_template_select(template_label: str, current_strict: bool):
+                                    """Handle template selection and update schema code and strict checkbox."""
+                                    schema_json, strict_val = on_schema_template_change(template_label, current_strict)
+                                    return (
+                                        gr.update(value=schema_json),  # schema_code
+                                        gr.update(value=strict_val),  # strict_ckb
+                                    )
+
+                                schema_template_dd.change(
+                                    on_schema_template_select,
+                                    inputs=[schema_template_dd, strict_ckb],
+                                    outputs=[schema_code, strict_ckb],
+                                    queue=False,
                                 )
 
                         # --- Prompting tab -------------------------------------
@@ -785,6 +1107,10 @@ def build_demo() -> gr.Blocks:
             system_prompt_box,
             context_box,
             api_base_box,
+            response_mode_dd,
+            strict_ckb,
+            schema_code,
+            schema_template_dd,
         ]
         submit_outputs = [chatbot, metrics_display]
 
@@ -806,11 +1132,11 @@ def build_demo() -> gr.Blocks:
             queue=False,
         )
 
-        # Update temperature slider when model changes
+        # Update all parameter UI components when model changes
         model_dropdown.change(
-            update_temperature_for_model,
+            update_params_for_model,
             inputs=[model_dropdown],
-            outputs=[temperature_slider],
+            outputs=[temperature_slider, top_p_slider, max_tokens_slider, seed_text],
             queue=False,
         )
 

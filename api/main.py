@@ -4,7 +4,7 @@ from fastapi.exceptions import RequestValidationError
 from typing import Generator, Optional
 from utils.errors import BackendError
 from utils.sse import sse_pack
-from config.load_models_config import _load_models_config
+from config.load_configs import _load_models_config
 from schemas.schemas import *
 from schemas.prompts import (
     CreatePromptRequest,
