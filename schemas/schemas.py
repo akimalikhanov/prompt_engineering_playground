@@ -3,6 +3,30 @@ from typing import List, Literal, Optional, Union, Dict, Any
 from typing_extensions import Annotated
 
 
+class JsonSchemaConfig(BaseModel):
+    """Configuration for json_schema response format."""
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    name: Optional[str] = Field(None, description="Optional name for the schema")
+    schema: Dict[str, Any] = Field(..., description="The JSON schema definition")
+    strict: bool = True
+
+
+class ResponseFormatJsonSchema(BaseModel):
+    """Response format for json_schema type."""
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["json_schema"] = "json_schema"
+    json_schema: JsonSchemaConfig
+
+
+class ResponseFormatJsonObject(BaseModel):
+    """Response format for json_object type."""
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["json_object"] = "json_object"
+
+
+ResponseFormat = Union[ResponseFormatJsonSchema, ResponseFormatJsonObject]
+
+
 class HealthResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: Literal["ok"] = "ok"
@@ -27,6 +51,7 @@ class ChatParams(BaseModel):
     top_p: Optional[Annotated[float, Field(ge=0.0, le=1.0)]] = 1.0
     max_tokens: Optional[Annotated[int, Field(ge=1, le=4000)]] = 512
     seed: Optional[Annotated[int, Field(ge=0, le=2_147_483_647)]] = None
+    response_format: Optional[ResponseFormat] = None
 
 class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")

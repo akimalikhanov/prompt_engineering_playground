@@ -283,17 +283,24 @@ def chat_stream_sse(body: ChatRequest):
                     if 'event: message' in chunk_str:
                         lines = chunk_str.split('\n')
                         for line in lines:
+                            line = line.strip()
                             if line.startswith('data: '):
-                                accumulated_text += line[6:]
+                                # Extract data content (skip 'data: ' prefix)
+                                data_content = line[6:]
+                                if data_content:  # Only add non-empty content
+                                    accumulated_text += data_content
                     
                     # Extract metrics from metrics event
-                    elif 'event: metrics' in chunk_str:
+                    if 'event: metrics' in chunk_str:
                         lines = chunk_str.split('\n')
                         for line in lines:
+                            line = line.strip()
                             if line.startswith('data: '):
                                 try:
-                                    metrics = json.loads(line[6:])
-                                except json.JSONDecodeError:
+                                    json_str = line[6:]  # Skip 'data: ' prefix
+                                    if json_str:
+                                        metrics = json.loads(json_str)
+                                except (json.JSONDecodeError, ValueError):
                                     pass
                     
                     yield chunk

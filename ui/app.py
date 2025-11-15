@@ -377,8 +377,10 @@ def stream_chat(
                                     running_history[-1] = (user_message, accumulated_response)
                                     latency_now = (time.perf_counter() - start_time) * 1000.0
                                     yield running_history, format_metrics_badges(metrics, ttft_ms, latency_now)
+                        # Process any remaining buffer content (incomplete final event)
                         if not done and sse_buffer.strip():
                             event_str = sse_buffer.strip()
+                            # Process metrics events
                             if "event: metrics" in event_str:
                                 for line in event_str.split("\n"):
                                     if line.startswith("data: "):
@@ -388,6 +390,20 @@ def stream_chat(
                                             metrics.update(metrics_data)
                                         except json.JSONDecodeError:
                                             pass
+                            # Also process message events in the final buffer
+                            elif "event: message" in event_str:
+                                data_lines = []
+                                for line in event_str.split("\n"):
+                                    if line.startswith("data: "):
+                                        data_lines.append(line[6:])
+                                new_text = "".join(data_lines)
+                                if new_text:
+                                    if ttft_ms is None:
+                                        ttft_ms = (time.perf_counter() - start_time) * 1000.0
+                                    accumulated_response += new_text
+                                    running_history[-1] = (user_message, accumulated_response)
+                                    latency_now = (time.perf_counter() - start_time) * 1000.0
+                                    yield running_history, format_metrics_badges(metrics, ttft_ms, latency_now)
                     else:
                         for chunk in response.iter_text():
                             if not chunk:
@@ -521,6 +537,26 @@ def reset_textbox():
     return ""
 
 
+def update_temperature_for_model(model_choice: Any):
+    """Update temperature slider based on selected model.
+    
+    For o4-mini models, set temperature to 1.0 and disable the slider.
+    For other models, enable the slider with default value.
+    """
+    normalized_choice = _normalize_selection(model_choice)
+    model_config = MODEL_LOOKUP.get(normalized_choice) if normalized_choice else None
+    
+    if model_config and normalized_choice == "gpt-o4-mini":
+        # o4-mini only supports temperature=1
+        return gr.update(value=1.0, interactive=False, 
+                        label="Temperature (fixed at 1.0 for o4-mini)")
+    else:
+        # Other models can use any temperature
+        default_temp = MODELS_DATA["defaults"].get("temperature", 0.7)
+        return gr.update(value=default_temp, interactive=True, 
+                        label="Temperature")
+
+
 def submit_chat_generator(*args):
     for value in stream_chat(*args):
         yield value
@@ -610,12 +646,22 @@ def build_demo() -> gr.Blocks:
                                 "for more deterministic outputs; higher for more creative."
                             )
                             with gr.Row():
+                                # Initialize temperature based on default model
+                                initial_temp = defaults.get("temperature", 0.7)
+                                initial_label = "Temperature"
+                                initial_interactive = True
+                                if DEFAULT_MODEL_ID == "gpt-o4-mini":
+                                    initial_temp = 1.0
+                                    initial_label = "Temperature (fixed at 1.0 for o4-mini)"
+                                    initial_interactive = False
+                                
                                 temperature_slider = gr.Slider(
-                                    label="Temperature",
+                                    label=initial_label,
                                     minimum=0.0,
                                     maximum=2.0,
                                     step=0.1,
-                                    value=defaults.get("temperature", 0.7),
+                                    value=initial_temp,
+                                    interactive=initial_interactive,
                                 )
                                 top_p_slider = gr.Slider(
                                     label="Top-p",
@@ -757,6 +803,14 @@ def build_demo() -> gr.Blocks:
             clear_chat_and_metrics,
             inputs=None,
             outputs=[chatbot, metrics_display],
+            queue=False,
+        )
+
+        # Update temperature slider when model changes
+        model_dropdown.change(
+            update_temperature_for_model,
+            inputs=[model_dropdown],
+            outputs=[temperature_slider],
             queue=False,
         )
 

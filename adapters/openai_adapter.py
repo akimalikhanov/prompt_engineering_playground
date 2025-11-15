@@ -70,10 +70,20 @@ def _unified_openai_api_call(
     normalized_messages = (
         [{"role": "user", "content": messages}] if isinstance(messages, str) else messages
     )
+    
+    # O4-series models (o4-mini) only support temperature=1
+    # Check if model is o4-mini or any o4 variant
+    is_o4_model = model.startswith("o4") or "o4-mini" in model
+    if is_o4_model:
+        # Force temperature to 1.0 for o4 models
+        temperature = 1.0
+    else:
+        temperature = params.get("temperature")
+    
     kwargs = {
         "model": model,
         "messages": normalized_messages,
-        "temperature": params.get("temperature"),
+        "temperature": temperature,
         "top_p": params.get("top_p"),
         "stream": stream,
     }
@@ -92,6 +102,34 @@ def _unified_openai_api_call(
     if "gemini" in model:
         kwargs.pop("seed", None)
 
+    # Handle response_format if provided
+    response_format = params.get("response_format")
+    if response_format is not None:
+        # Convert to dict if it's a Pydantic model
+        if hasattr(response_format, "model_dump"):
+            # Use exclude_none=True to omit None values (like optional name field)
+            response_format_dict = response_format.model_dump(exclude_none=True)
+        elif isinstance(response_format, dict):
+            response_format_dict = response_format.copy()
+            # Remove None values from dict
+            if isinstance(response_format_dict.get("json_schema"), dict):
+                json_schema_config = response_format_dict["json_schema"]
+                response_format_dict["json_schema"] = {
+                    k: v for k, v in json_schema_config.items() if v is not None
+                }
+        else:
+            response_format_dict = dict(response_format)
+        
+        # Ensure strict defaults to True for json_schema type if not provided
+        if response_format_dict.get("type") == "json_schema":
+            json_schema_config = response_format_dict.get("json_schema", {})
+            if isinstance(json_schema_config, dict):
+                # If strict is not provided, default to True
+                if "strict" not in json_schema_config:
+                    json_schema_config["strict"] = True
+        
+        kwargs["response_format"] = response_format_dict
+
     # If streaming, request usage at end-of-stream
     if stream:
         kwargs["stream_options"] = {"include_usage": True}
@@ -103,12 +141,22 @@ def _unified_openai_api_call(
     def _iter_text(chunks):
         """Yield textual deltas only; ignore non-text chunks."""
         for ch in chunks:
-            # ch.choices[0].delta.content is the streamed text piece (may be None)
+            piece = None
+            # Try delta.content first (standard streaming format)
             try:
                 delta = ch.choices[0].delta
                 piece = getattr(delta, "content", None)
-            except Exception:
-                piece = None
+            except (AttributeError, IndexError, TypeError):
+                pass
+            
+            # Fallback: check message.content (some models like o4-mini may use this for final chunk)
+            if not piece:
+                try:
+                    message = ch.choices[0].message
+                    piece = getattr(message, "content", None)
+                except (AttributeError, IndexError, TypeError):
+                    pass
+            
             if piece:
                 yield piece, ch
             else:

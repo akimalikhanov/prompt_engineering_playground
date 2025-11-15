@@ -77,7 +77,8 @@ models:
       notes: "OpenAI list price: $1.10 per 1M input tokens, $4.40 per 1M output tokens. Compact reasoning model with 200k context window."
     capabilities:
       streaming: true
-    params_override: {}       # keep empty to use defaults
+    params_override:
+      temperature: 1.0            # o4-mini only supports temperature=1
 
   - id: gemini-flash-lite
     label: "Gemini 2.5 Flash Lite"
