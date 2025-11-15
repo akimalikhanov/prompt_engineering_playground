@@ -4,7 +4,7 @@ from fastapi.exceptions import RequestValidationError
 from typing import Generator, Optional
 from utils.errors import BackendError
 from utils.sse import sse_pack
-from config.load_configs import _load_models_config
+from utils.load_configs import _load_models_config
 from schemas.schemas import *
 from schemas.prompts import (
     CreatePromptRequest,
@@ -23,7 +23,7 @@ from services.prompts_service import (
     create_prompt,
     get_prompt_by_id,
     create_new_version,
-    get_latest_by_technique_and_title,
+    get_latest_by_key,
     get_prompt_by_id_and_version,
     update_prompt_status
 )
@@ -365,23 +365,23 @@ def chat_stream_sse(body: ChatRequest):
 
 @app.get("/prompts", response_model=ListPromptsResponse)
 def list_prompts(
-    technique_key: Optional[str] = Query(None, description="Filter by technique key"),
-    q: Optional[str] = Query(None, description="Search query for title/technique"),
-    enabled: Optional[bool] = Query(None, description="Filter by enabled status")
+    technique: Optional[str] = Query(None, description="Filter by technique ('zero_shot', 'few_shot', 'prompt_chain')"),
+    q: Optional[str] = Query(None, description="Search query for title/description"),
+    is_active: Optional[bool] = Query(None, description="Filter by active status")
 ):
     """
     List latest prompts from v_prompt_examples_latest view.
     
     Query params:
-    - technique_key: Filter by technique (e.g., 'cot', 'react')
-    - q: Search in title and technique_key
-    - enabled: Filter by is_enabled flag
+    - technique: Filter by technique ('zero_shot', 'few_shot', 'prompt_chain')
+    - q: Search in title and description
+    - is_active: Filter by is_active flag
     """
     try:
         prompts = get_latest_prompts(
-            technique_key=technique_key,
+            technique=technique,
             q=q,
-            enabled=enabled
+            is_active=is_active
         )
         
         return ListPromptsResponse(
@@ -396,53 +396,57 @@ def list_prompts(
 @app.post("/prompts", response_model=PromptExampleResponse, status_code=201)
 def create_prompt_endpoint(body: CreatePromptRequest):
     """
-    Create a new prompt with version = 1, status = 'active', is_enabled = true.
+    Create a new prompt with version = 1, is_active = true.
     
     Body:
-    - technique_key: Technique identifier (must exist)
+    - key: Internal key (unique identifier)
     - title: Prompt title
-    - language: Language code (default 'en')
-    - messages: List of message objects with role and content
+    - prompt_template: Messages array in LLM format with Jinja variables
+    - technique: Technique type ('zero_shot', 'few_shot', 'prompt_chain')
+    - description: Optional description
+    - category: Optional category
+    - tags: Optional list of tags
     - variables: Optional list of variable definitions
-    - model_hint: Optional model recommendation
+    - default_examples: Optional few-shot examples
+    - response_format: Optional response format ('json_object', 'json_schema')
+    - json_schema_template: Optional JSON schema template (only if response_format='json_schema')
     """
     try:
         # Convert Pydantic models to dicts
-        messages_dicts = [msg.model_dump() for msg in body.messages]
+        prompt_template = [msg.model_dump() for msg in body.prompt_template] if hasattr(body, 'prompt_template') and body.prompt_template else []
         variables_dicts = [var.model_dump() for var in body.variables] if body.variables else []
         
         prompt = create_prompt(
-            technique_key=body.technique_key,
+            key=body.key,
             title=body.title,
-            messages=messages_dicts,
-            language=body.language or "en",
+            prompt_template=prompt_template,
+            technique=body.technique,
+            description=getattr(body, 'description', None),
+            category=getattr(body, 'category', None),
+            tags=getattr(body, 'tags', None),
             variables=variables_dicts,
-            model_hint=body.model_hint
+            default_examples=getattr(body, 'default_examples', None),
+            response_format=getattr(body, 'response_format', None),
+            json_schema_template=getattr(body, 'json_schema_template', None)
         )
         
         return PromptExampleResponse.model_validate(prompt)
     
     except Exception as e:
         logger.error(f"Error creating prompt: {e}", exc_info=True)
-        # Check if it's a foreign key constraint error (technique doesn't exist)
-        if "foreign key constraint" in str(e).lower():
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid technique_key: {body.technique_key} does not exist"
-            )
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/prompts/{example_id}", response_model=PromptExampleResponse)
-def get_prompt(example_id: str):
+@app.get("/prompts/{prompt_id}", response_model=PromptExampleResponse)
+def get_prompt(prompt_id: str):
     """
-    Get a specific prompt by its example_id (any version).
+    Get a specific prompt by its id (any version).
     
     Path params:
-    - example_id: UUID of the prompt
+    - prompt_id: UUID of the prompt
     """
     try:
-        prompt = get_prompt_by_id(example_id)
+        prompt = get_prompt_by_id(prompt_id)
         
         if not prompt:
             raise HTTPException(status_code=404, detail="Prompt not found")
@@ -452,45 +456,53 @@ def get_prompt(example_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting prompt {example_id}: {e}", exc_info=True)
+        logger.error(f"Error getting prompt {prompt_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/prompts/{example_id}/versions", response_model=PromptExampleResponse, status_code=201)
-def create_version(example_id: str, body: CreateVersionRequest):
+@app.post("/prompts/{prompt_id}/versions", response_model=PromptExampleResponse, status_code=201)
+def create_version(prompt_id: str, body: CreateVersionRequest):
     """
     Create a new version of an existing prompt.
     
-    Clones the (technique_key, title), increments version, sets status='active'.
-    Optionally overrides messages, variables, model_hint, or language.
+    Clones the key, increments version, sets is_active=true.
+    Optionally overrides prompt_template, variables, and other fields.
     
     Path params:
-    - example_id: UUID of the base prompt to clone
+    - prompt_id: UUID of the base prompt to clone
     
     Body (all optional):
-    - messages: Override messages
+    - prompt_template: Override prompt template (messages array)
     - variables: Override variables
-    - model_hint: Override model hint
-    - language: Override language
+    - default_examples: Override default examples
+    - response_format: Override response format
+    - json_schema_template: Override JSON schema template
+    - description: Override description
+    - category: Override category
+    - tags: Override tags
     """
     try:
         # Convert Pydantic models to dicts if provided
-        messages_dicts = None
-        if body.messages:
-            messages_dicts = [msg.model_dump() for msg in body.messages]
+        prompt_template = None
+        if hasattr(body, 'prompt_template') and body.prompt_template:
+            prompt_template = [msg.model_dump() for msg in body.prompt_template]
         
         variables_dicts = None
-        if body.variables:
+        if hasattr(body, 'variables') and body.variables:
             variables_dicts = [var.model_dump() for var in body.variables]
         
-        # Create new version (auto-archive previous)
+        # Create new version (auto-deactivate previous)
         new_prompt = create_new_version(
-            example_id=example_id,
-            messages=messages_dicts,
+            prompt_id=prompt_id,
+            prompt_template=prompt_template,
             variables=variables_dicts,
-            model_hint=body.model_hint,
-            language=body.language,
-            auto_archive_previous=True  # Archive previous active version
+            default_examples=getattr(body, 'default_examples', None),
+            response_format=getattr(body, 'response_format', None),
+            json_schema_template=getattr(body, 'json_schema_template', None),
+            description=getattr(body, 'description', None),
+            category=getattr(body, 'category', None),
+            tags=getattr(body, 'tags', None),
+            auto_deactivate_previous=True  # Deactivate previous active version
         )
         
         if not new_prompt:
@@ -501,26 +513,25 @@ def create_version(example_id: str, body: CreateVersionRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error creating version for {example_id}: {e}", exc_info=True)
+        logger.error(f"Error creating version for {prompt_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/prompts/{technique_key}/{title}/latest", response_model=PromptExampleResponse)
-def get_latest_prompt(technique_key: str, title: str):
+@app.get("/prompts/{key}/latest", response_model=PromptExampleResponse)
+def get_latest_prompt(key: str):
     """
-    Get the latest active and enabled prompt by technique_key and title.
+    Get the latest active prompt by key.
     
     Path params:
-    - technique_key: Technique identifier
-    - title: Prompt title
+    - key: Prompt key (unique identifier)
     """
     try:
-        prompt = get_latest_by_technique_and_title(technique_key, title)
+        prompt = get_latest_by_key(key)
         
         if not prompt:
             raise HTTPException(
                 status_code=404,
-                detail=f"No active prompt found for technique '{technique_key}' and title '{title}'"
+                detail=f"No active prompt found for key '{key}'"
             )
         
         return PromptExampleResponse.model_validate(prompt)
@@ -528,13 +539,13 @@ def get_latest_prompt(technique_key: str, title: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting latest prompt {technique_key}/{title}: {e}", exc_info=True)
+        logger.error(f"Error getting latest prompt {key}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/prompts/{example_id}/render", response_model=RenderPromptResponse)
+@app.post("/prompts/{prompt_id}/render", response_model=RenderPromptResponse)
 def render_prompt(
-    example_id: str,
+    prompt_id: str,
     body: RenderPromptRequest,
     version: Optional[int] = Query(None, description="Specific version to render (default: latest)")
 ):
@@ -542,10 +553,10 @@ def render_prompt(
     Render prompt messages with Jinja2 using provided variables.
     
     Path params:
-    - example_id: UUID of the prompt
+    - prompt_id: UUID of the prompt
     
     Query params:
-    - version: Optional version number (default: uses the example_id's version)
+    - version: Optional version number (default: uses the prompt_id's version)
     
     Body:
     - variables: Dict of variables to substitute in templates
@@ -557,19 +568,19 @@ def render_prompt(
     - warnings: List of warnings (e.g., unused variables, template errors)
     """
     try:
-        # Get the prompt (specific version if provided, otherwise the one with this example_id)
-        prompt = get_prompt_by_id_and_version(example_id, version)
+        # Get the prompt (specific version if provided, otherwise the one with this prompt_id)
+        prompt = get_prompt_by_id_and_version(prompt_id, version)
         
         if not prompt:
             raise HTTPException(
                 status_code=404,
-                detail=f"Prompt not found for example_id={example_id}" + 
+                detail=f"Prompt not found for prompt_id={prompt_id}" + 
                        (f", version={version}" if version else "")
             )
         
         # Render messages
         rendered_msgs, missing_vars, warnings = render_messages(
-            messages=prompt.messages,
+            messages=prompt.prompt_template,
             variables=body.variables
         )
         
@@ -589,34 +600,32 @@ def render_prompt(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error rendering prompt {example_id}: {e}", exc_info=True)
+        logger.error(f"Error rendering prompt {prompt_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.patch("/prompts/{example_id}", response_model=PromptExampleResponse)
-def update_prompt(example_id: str, body: PatchPromptRequest):
+@app.patch("/prompts/{prompt_id}", response_model=PromptExampleResponse)
+def update_prompt(prompt_id: str, body: PatchPromptRequest):
     """
-    Update prompt's is_enabled flag and/or status.
+    Update prompt's is_active flag.
     
     Path params:
-    - example_id: UUID of the prompt
+    - prompt_id: UUID of the prompt
     
-    Body (at least one required):
-    - is_enabled: Set enabled flag (true/false)
-    - status: Set status ('active', 'archived', 'draft')
+    Body:
+    - is_active: Set active flag (true/false)
     """
     try:
-        # Check that at least one field is provided
-        if body.is_enabled is None and body.status is None:
+        # Check that is_active is provided
+        if body.is_active is None:
             raise HTTPException(
                 status_code=400,
-                detail="At least one of 'is_enabled' or 'status' must be provided"
+                detail="'is_active' must be provided"
             )
         
         updated_prompt = update_prompt_status(
-            example_id=example_id,
-            is_enabled=body.is_enabled,
-            status=body.status
+            prompt_id=prompt_id,
+            is_active=body.is_active
         )
         
         if not updated_prompt:
@@ -627,7 +636,7 @@ def update_prompt(example_id: str, body: PatchPromptRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error updating prompt {example_id}: {e}", exc_info=True)
+        logger.error(f"Error updating prompt {prompt_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

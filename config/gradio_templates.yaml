@@ -1,0 +1,261 @@
+# config/gradio_templates.yaml
+# Purpose: Templates and configurations used in the Gradio UI
+# - Stores delimiter definitions for prompt engineering
+# - Includes static templates and dynamic resolver configurations
+# - API endpoint configurations
+
+endpoints:
+  chat:
+    label: "Non-streaming JSON (/chat)"
+    path: "/chat"
+    stream: false
+    sse: false
+
+  chat.stream:
+    label: "Streaming text (/chat.stream)"
+    path: "/chat.stream"
+    stream: true
+    sse: false
+
+  chat.streamsse:
+    label: "Streaming SSE (/chat.streamsse)"
+    path: "/chat.streamsse"
+    stream: true
+    sse: true
+
+default_endpoint: "chat.streamsse"
+
+delimiters:
+  # Baseline markdown-style fences
+  "``` … ```":
+    start: "```\n"
+    end: "\n```"
+
+  "\"\"\" … \"\"\"":
+    start: "\"\"\"\n"
+    end: "\n\"\"\""
+
+  "~~~ … ~~~":
+    start: "~~~\n"
+    end: "\n~~~"
+
+  # Dynamic helpers
+  "Markdown ```{lang} … ```":
+    resolver_type: "markdown"
+    requires_start: true
+    start_label: "Language"
+    start_placeholder: "e.g. json, python, bash"
+
+  "XML <tag> … </tag>":
+    resolver_type: "xml"
+    requires_start: true
+    start_label: "Tag name"
+    start_placeholder: "e.g. instruction"
+
+  # Comment / heredoc styles
+  "<!-- … -->":
+    start: "<!--\n"
+    end: "\n-->"
+
+  "/* … */":
+    start: "/*\n"
+    end: "\n*/"
+
+  "<<EOF … EOF (heredoc)":
+    start: "<<EOF\n"
+    end: "\nEOF"
+
+  # Front matter
+  "--- … --- (YAML front matter)":
+    start: "---\n"
+    end: "\n---"
+
+  # Model templates
+  "[INST] … [/INST]":
+    start: "[INST]\n"
+    end: "\n[/INST]"
+
+  "<|im_start|> … <|im_end|>":
+    start: "<|im_start|>\n"
+    end: "\n<|im_end|>"
+
+  # Section headers
+  "### BEGIN … ### END":
+    start: "### BEGIN\n"
+    end: "\n### END"
+
+  # Flexible customs
+  "Custom…":
+    resolver_type: "custom"
+    requires_start: true
+    requires_end: true
+    start_label: "Custom start token"
+    start_placeholder: "e.g. [[[INSTRUCT]]]"
+    end_label: "Custom end token"
+    end_placeholder: "e.g. [[[/INSTRUCT]]]"
+
+response_schema_templates:
+  # ===========================================================
+  # 1. Simple key-value template
+  # ===========================================================
+  - id: key_value
+    label: "Key–value result"
+    description: "Simple template: return a key and a value."
+    json_schema:
+      name: "KeyValueSchema"
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          key:
+            type: string
+          value:
+            type: string
+        required:
+          - key
+          - value
+
+  # ===========================================================
+  # 2. User profile (simple)
+  # ===========================================================
+  - id: user_profile
+    label: "User profile (basic demographic details)"
+    description: "Structured user profile with demographic and personal details."
+    json_schema:
+      name: "UserProfileSchema"
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          full_name:
+            type: string
+          age:
+            type: integer
+          gender:
+            type: string
+          ethnicity:
+            type: string
+          education_level:
+            type: string
+          employment_status:
+            type: string
+          marital_status:
+            type: string
+        required:
+          - full_name
+          - age
+          - gender
+          - ethnicity
+          - education_level
+          - employment_status
+          - marital_status
+
+  # ===========================================================
+  # 3. FAQ Answer object (medium complexity)
+  # ===========================================================
+  - id: faq_answer
+    label: "FAQ answer"
+    description: "Structured FAQ response with key points, confidence score, and follow-up questions."
+    json_schema:
+      name: "FAQAnswerSchema"
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          question:
+            type: string
+            description: "The original FAQ question."
+          answer:
+            type: string
+            description: "A clear, concise answer."
+          key_points:
+            type: array
+            items:
+              type: string
+            maxItems: 10
+            description: "Most important bullet points derived from the answer."
+          confidence:
+            type: number
+            minimum: 0
+            maximum: 1
+            description: "Model's self-estimated confidence score between 0 and 1."
+          follow_up_questions:
+            type: array
+            items:
+              type: string
+            maxItems: 5
+            description: "Suggested follow-up questions the user may ask next."
+        required:
+          - question
+          - answer
+          - key_points
+          - confidence
+          - follow_up_questions
+
+  # ===========================================================
+  # 4. Sentiment analysis result (enum + confidence)
+  # ===========================================================
+  - id: sentiment_analysis
+    label: "Sentiment analysis (enum + scores)"
+    description: "Structured sentiment classification with confidence score."
+    json_schema:
+      name: "SentimentSchema"
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          sentiment:
+            type: string
+            enum: ["positive", "neutral", "negative"]
+          confidence:
+            type: number
+            minimum: 0
+            maximum: 1
+          explanation:
+            type: string
+        required:
+          - sentiment
+          - confidence
+          - explanation
+
+  # ===========================================================
+  # 5. Product summary (nested object + arrays)
+  # ===========================================================
+  - id: product_summary
+    label: "Product summary"
+    description: "Nested object with product info, features, and tags."
+    json_schema:
+      name: "ProductSummarySchema"
+      schema:
+        type: object
+        additionalProperties: false
+        properties:
+          product:
+            type: object
+            additionalProperties: false
+            properties:
+              name:
+                type: string
+              price:
+                type: number
+              currency:
+                type: string
+                enum: ["USD", "EUR", "GBP", "JPY", "AZN"]
+            required:
+              - name
+              - price
+              - currency
+          features:
+            type: array
+            items:
+              type: string
+            maxItems: 10
+          tags:
+            type: array
+            items:
+              type: string
+            maxItems: 5
+        required:
+          - product
+          - features
+          - tags

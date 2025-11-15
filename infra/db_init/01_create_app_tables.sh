@@ -23,40 +23,64 @@ CREATE TABLE IF NOT EXISTS app.prompt_techniques (
 );
 
 -- ===============================
--- Prompt examples (multi-message, versioned, one active)
+-- Prompt examples
 -- ===============================
 CREATE TABLE IF NOT EXISTS app.prompt_examples (
-  example_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- internal key you can hardcode in code / seeds
+    key                 TEXT NOT NULL,
+    version             INT NOT NULL DEFAULT 1,
 
-  technique_key  TEXT NOT NULL REFERENCES app.prompt_techniques(key) ON DELETE CASCADE,
-  title          TEXT NOT NULL,                -- short label (e.g. "summarizer")
+    -- basic metadata
+    title               TEXT NOT NULL,
+    description         TEXT,
+    category            TEXT,                    -- e.g. 'qa', 'summarization', 'coding'
+    technique           TEXT NOT NULL CHECK (
+                            technique IN ('zero_shot', 'few_shot', 'prompt_chain')
+                        ),
+    tags                TEXT[] DEFAULT '{}',     -- optional
 
-  version        INT  NOT NULL DEFAULT 1,      -- version number
-  status         TEXT NOT NULL DEFAULT 'active',  -- 'active', 'archived', 'draft'
+    -- core template (messages array in LLM format with Jinja variables)
+    prompt_template     JSONB NOT NULL,          -- [{"role": "system", "content": "..."}, {"role": "user", "content": "{{variable}}"}]
+    -- Messages array format with Jinja variables in content fields
 
-  language       TEXT NOT NULL DEFAULT 'en',
-  messages       JSONB NOT NULL,               -- [{role:'system|user|assistant|tool', content:'...'}, ...]
-  variables      JSONB NOT NULL DEFAULT '[]',  -- [{"name":"text","type":"string","required":true,"desc":"..."}]
-  model_hint     TEXT,
+    -- variable definitions (for rendering UI form & defaults)
+    variables           JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- [
+    --   {"name": "input_text", "type": "string", "default": "", "required": true},
+    --   {"name": "tone", "type": "string", "default": "neutral", "required": false}
+    -- ]
 
-  is_enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+    -- few-shot defaults (optional; user can add more examples in UI at runtime)
+    default_examples    JSONB,                   -- NULL if zero-shot
+    -- e.g. [{"input": "Q1", "output": "A1"}, {"input": "Q2", "output": "A2"}]
 
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- response format for structured output
+    response_format     TEXT CHECK (
+                            response_format IN ('json_object', 'json_schema')
+                        ),
+    -- NULL = no structured output, 'json_object' = basic JSON mode, 'json_schema' = JSON schema mode (preferred)
+    
+    -- JSON schema template (only used when response_format='json_schema')
+    json_schema_template JSONB,  -- NULL if not using json_schema, JSON schema definition if using json_schema
+    
+    tool_config         JSONB,  -- NULL = not used, JSON = on + config
 
-  -- Each technique + title can have multiple versions,
-  -- but version numbers must be unique per pair
-  UNIQUE (technique_key, title, version)
+    is_active           BOOLEAN NOT NULL DEFAULT TRUE,
+
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- Each key can have multiple versions, but version numbers must be unique per key
+    UNIQUE (key, version)
 );
 
--- ✅ Partial unique index: only one ACTIVE version per (technique_key, title)
-CREATE UNIQUE INDEX IF NOT EXISTS ux_prompt_examples_active
-  ON app.prompt_examples (technique_key, title)
-  WHERE status = 'active';
-
--- Optional: quick lookup of latest versions
-CREATE INDEX IF NOT EXISTS idx_prompt_examples_latest
-  ON app.prompt_examples (technique_key, title, version DESC);
+CREATE INDEX IF NOT EXISTS idx_prompt_examples_technique ON app.prompt_examples(technique);
+CREATE INDEX IF NOT EXISTS idx_prompt_examples_category ON app.prompt_examples(category);
+-- simple full-text-ish search (search in title and description only, prompt_template is JSONB now)
+CREATE INDEX IF NOT EXISTS idx_prompt_examples_search
+ON app.prompt_examples
+USING GIN (to_tsvector('simple', coalesce(title,'') || ' ' || coalesce(description,'')));
 
 -- ===============================
 -- Runs (analytics-oriented)
@@ -115,6 +139,19 @@ CREATE INDEX IF NOT EXISTS ix_runs_provider_model  ON app.runs (provider_key, mo
 -- Light JSONB indexes for common filters
 CREATE INDEX IF NOT EXISTS gin_runs_params         ON app.runs USING GIN (params_json);
 CREATE INDEX IF NOT EXISTS gin_runs_metadata       ON app.runs USING GIN (metadata);
+
+-- Grant permissions to the current user (APP_DB_USER)
+-- Since we're running as APP_DB_USER, ensure schema ownership and permissions
+ALTER SCHEMA app OWNER TO CURRENT_USER;
+GRANT USAGE ON SCHEMA app TO CURRENT_USER;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA app TO CURRENT_USER;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA app TO CURRENT_USER;
+GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA app TO CURRENT_USER;
+
+-- Set default privileges for future objects
+ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON TABLES TO CURRENT_USER;
+ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON SEQUENCES TO CURRENT_USER;
+ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON FUNCTIONS TO CURRENT_USER;
 EOSQL
 
 echo "[init] app tables created."

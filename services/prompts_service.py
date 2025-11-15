@@ -28,17 +28,17 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def get_latest_prompts(
-    technique_key: Optional[str] = None,
+    technique: Optional[str] = None,
     q: Optional[str] = None,
-    enabled: Optional[bool] = None
+    is_active: Optional[bool] = None
 ) -> List[PromptExample]:
     """
     Get latest prompts from v_prompt_examples_latest view with filters.
     
     Args:
-        technique_key: Filter by technique key
-        q: Search query (searches in title and technique_key)
-        enabled: Filter by is_enabled flag
+        technique: Filter by technique ('zero_shot', 'few_shot', 'prompt_chain')
+        q: Search query (searches in title and description)
+        is_active: Filter by is_active flag
     
     Returns:
         List of PromptExample objects
@@ -49,9 +49,9 @@ def get_latest_prompts(
         query = text("""
             SELECT * FROM app.v_prompt_examples_latest
             WHERE 1=1
-            AND (:technique_key IS NULL OR technique_key = :technique_key)
-            AND (:enabled IS NULL OR is_enabled = :enabled)
-            AND (:q_pattern IS NULL OR title ILIKE :q_pattern OR technique_key ILIKE :q_pattern)
+            AND (:technique IS NULL OR technique = :technique)
+            AND (:is_active IS NULL OR is_active = :is_active)
+            AND (:q_pattern IS NULL OR title ILIKE :q_pattern OR description ILIKE :q_pattern)
             ORDER BY created_at DESC
         """)
         
@@ -59,8 +59,8 @@ def get_latest_prompts(
         result = session.execute(
             query,
             {
-                "technique_key": technique_key,
-                "enabled": enabled,
+                "technique": technique,
+                "is_active": is_active,
                 "q_pattern": q_pattern
             }
         )
@@ -69,16 +69,21 @@ def get_latest_prompts(
         prompts = []
         for row in result:
             prompt = PromptExample(
-                example_id=row.example_id,
-                technique_key=row.technique_key,
-                title=row.title,
+                id=row.id,
+                key=row.key,
                 version=row.version,
-                status=row.status,
-                language=row.language,
-                messages=row.messages,
-                variables=row.variables,
-                model_hint=row.model_hint,
-                is_enabled=row.is_enabled,
+                title=row.title,
+                description=row.description,
+                category=row.category,
+                technique=row.technique,
+                tags=row.tags or [],
+                prompt_template=row.prompt_template,
+                variables=row.variables or [],
+                default_examples=row.default_examples,
+                response_format=row.response_format,
+                json_schema_template=row.json_schema_template,
+                tool_config=row.tool_config,
+                is_active=row.is_active,
                 created_at=row.created_at,
                 updated_at=row.updated_at
             )
@@ -90,23 +95,35 @@ def get_latest_prompts(
 
 
 def create_prompt(
-    technique_key: str,
+    key: str,
     title: str,
-    messages: List[Dict[str, str]],
-    language: str = "en",
+    prompt_template: List[Dict[str, str]],
+    technique: str,
+    description: Optional[str] = None,
+    category: Optional[str] = None,
+    tags: Optional[List[str]] = None,
     variables: Optional[List[Dict[str, Any]]] = None,
-    model_hint: Optional[str] = None
+    default_examples: Optional[List[Dict[str, Any]]] = None,
+    response_format: Optional[str] = None,
+    json_schema_template: Optional[Dict[str, Any]] = None,
+    tool_config: Optional[Dict[str, Any]] = None
 ) -> PromptExample:
     """
     Create a new prompt (version 1).
     
     Args:
-        technique_key: Technique key (must exist in prompt_techniques)
+        key: Internal key (unique identifier)
         title: Prompt title
-        messages: List of message dicts
-        language: Language code (default 'en')
+        prompt_template: Messages array in LLM format [{"role": "system", "content": "..."}, ...] with Jinja variables
+        technique: Technique type ('zero_shot', 'few_shot', 'prompt_chain')
+        description: Optional description
+        category: Optional category (e.g. 'qa', 'summarization', 'coding')
+        tags: Optional list of tags
         variables: List of variable definitions
-        model_hint: Optional model recommendation
+        default_examples: Optional few-shot examples (for few_shot technique)
+        response_format: Response format (None, 'json_object', 'json_schema')
+        json_schema_template: Optional JSON schema template (only used when response_format='json_schema')
+        tool_config: Optional tool config
     
     Returns:
         Created PromptExample object
@@ -114,15 +131,20 @@ def create_prompt(
     session = SessionLocal()
     try:
         prompt = PromptExample(
-            technique_key=technique_key,
+            key=key,
             title=title,
             version=1,
-            status="active",
-            language=language,
-            messages=messages,
+            description=description,
+            category=category,
+            technique=technique,
+            tags=tags or [],
+            prompt_template=prompt_template,
             variables=variables or [],
-            model_hint=model_hint,
-            is_enabled=True
+            default_examples=default_examples,
+            response_format=response_format,
+            json_schema_template=json_schema_template,
+            tool_config=tool_config,
+            is_active=True
         )
         
         session.add(prompt)
@@ -133,12 +155,12 @@ def create_prompt(
         session.close()
 
 
-def get_prompt_by_id(example_id: str) -> Optional[PromptExample]:
+def get_prompt_by_id(prompt_id: str) -> Optional[PromptExample]:
     """
-    Get a prompt by its example_id.
+    Get a prompt by its id.
     
     Args:
-        example_id: UUID of the prompt
+        prompt_id: UUID of the prompt
     
     Returns:
         PromptExample object or None if not found
@@ -146,7 +168,7 @@ def get_prompt_by_id(example_id: str) -> Optional[PromptExample]:
     session = SessionLocal()
     try:
         prompt = session.query(PromptExample).filter(
-            PromptExample.example_id == example_id
+            PromptExample.id == prompt_id
         ).first()
         
         if prompt:
@@ -159,23 +181,33 @@ def get_prompt_by_id(example_id: str) -> Optional[PromptExample]:
 
 
 def create_new_version(
-    example_id: str,
-    messages: Optional[List[Dict[str, str]]] = None,
+    prompt_id: str,
+    prompt_template: Optional[List[Dict[str, str]]] = None,
     variables: Optional[List[Dict[str, Any]]] = None,
-    model_hint: Optional[str] = None,
-    language: Optional[str] = None,
-    auto_archive_previous: bool = False
+    default_examples: Optional[List[Dict[str, Any]]] = None,
+    response_format: Optional[str] = None,
+    json_schema_template: Optional[Dict[str, Any]] = None,
+    tool_config: Optional[Dict[str, Any]] = None,
+    description: Optional[str] = None,
+    category: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    auto_deactivate_previous: bool = False
 ) -> Optional[PromptExample]:
     """
     Create a new version of an existing prompt.
     
     Args:
-        example_id: UUID of the base prompt to clone
-        messages: Optional new messages (uses base if None)
+        prompt_id: UUID of the base prompt to clone
+        prompt_template: Optional new template (uses base if None)
         variables: Optional new variables (uses base if None)
-        model_hint: Optional new model hint (uses base if None)
-        language: Optional new language (uses base if None)
-        auto_archive_previous: If True, archives the previous active version
+        default_examples: Optional new default examples (uses base if None)
+        response_format: Optional new response format (uses base if None)
+        json_schema_template: Optional new JSON schema template (uses base if None)
+        tool_config: Optional new tool config (uses base if None)
+        description: Optional new description (uses base if None)
+        category: Optional new category (uses base if None)
+        tags: Optional new tags (uses base if None)
+        auto_deactivate_previous: If True, deactivates the previous active version
     
     Returns:
         New PromptExample object or None if base not found
@@ -184,42 +216,45 @@ def create_new_version(
     try:
         # Get the base prompt
         base_prompt = session.query(PromptExample).filter(
-            PromptExample.example_id == example_id
+            PromptExample.id == prompt_id
         ).first()
         
         if not base_prompt:
             return None
         
-        # Get the max version for this technique_key + title
+        # Get the max version for this key
         max_version = session.query(PromptExample).filter(
-            PromptExample.technique_key == base_prompt.technique_key,
-            PromptExample.title == base_prompt.title
+            PromptExample.key == base_prompt.key
         ).order_by(desc(PromptExample.version)).first()
         
         next_version = (max_version.version if max_version else 0) + 1
         
-        # Optionally archive the previous active version
-        if auto_archive_previous:
+        # Optionally deactivate the previous active version
+        if auto_deactivate_previous:
             previous_active = session.query(PromptExample).filter(
-                PromptExample.technique_key == base_prompt.technique_key,
-                PromptExample.title == base_prompt.title,
-                PromptExample.status == "active"
+                PromptExample.key == base_prompt.key,
+                PromptExample.is_active == True
             ).first()
             
             if previous_active:
-                previous_active.status = "archived"
+                previous_active.is_active = False
         
         # Create new version
         new_prompt = PromptExample(
-            technique_key=base_prompt.technique_key,
+            key=base_prompt.key,
             title=base_prompt.title,
             version=next_version,
-            status="active",
-            language=language if language is not None else base_prompt.language,
-            messages=messages if messages is not None else base_prompt.messages,
+            description=description if description is not None else base_prompt.description,
+            category=category if category is not None else base_prompt.category,
+            technique=base_prompt.technique,
+            tags=tags if tags is not None else base_prompt.tags,
+            prompt_template=prompt_template if prompt_template is not None else base_prompt.prompt_template,
             variables=variables if variables is not None else base_prompt.variables,
-            model_hint=model_hint if model_hint is not None else base_prompt.model_hint,
-            is_enabled=True
+            default_examples=default_examples if default_examples is not None else base_prompt.default_examples,
+            response_format=response_format if response_format is not None else base_prompt.response_format,
+            json_schema_template=json_schema_template if json_schema_template is not None else base_prompt.json_schema_template,
+            tool_config=tool_config if tool_config is not None else base_prompt.tool_config,
+            is_active=True
         )
         
         session.add(new_prompt)
@@ -233,16 +268,14 @@ def create_new_version(
         session.close()
 
 
-def get_latest_by_technique_and_title(
-    technique_key: str,
-    title: str
+def get_latest_by_key(
+    key: str
 ) -> Optional[PromptExample]:
     """
-    Get the latest active and enabled prompt by technique_key and title.
+    Get the latest active prompt by key.
     
     Args:
-        technique_key: Technique key
-        title: Prompt title
+        key: Prompt key
     
     Returns:
         PromptExample object or None if not found
@@ -251,30 +284,34 @@ def get_latest_by_technique_and_title(
     try:
         query = text("""
             SELECT * FROM app.v_prompt_examples_latest
-            WHERE technique_key = :technique_key
-            AND title = :title
+            WHERE key = :key
             LIMIT 1
         """)
         
         result = session.execute(
             query,
-            {"technique_key": technique_key, "title": title}
+            {"key": key}
         ).first()
         
         if not result:
             return None
         
         prompt = PromptExample(
-            example_id=result.example_id,
-            technique_key=result.technique_key,
-            title=result.title,
+            id=result.id,
+            key=result.key,
             version=result.version,
-            status=result.status,
-            language=result.language,
-            messages=result.messages,
-            variables=result.variables,
-            model_hint=result.model_hint,
-            is_enabled=result.is_enabled,
+            title=result.title,
+            description=result.description,
+            category=result.category,
+            technique=result.technique,
+            tags=result.tags or [],
+            prompt_template=result.prompt_template,
+            variables=result.variables or [],
+            default_examples=result.default_examples,
+            response_format=result.response_format,
+            json_schema_template=result.json_schema_template,
+            tool_config=result.tool_config,
+            is_active=result.is_active,
             created_at=result.created_at,
             updated_at=result.updated_at
         )
@@ -285,15 +322,15 @@ def get_latest_by_technique_and_title(
 
 
 def get_prompt_by_id_and_version(
-    example_id: str,
+    prompt_id: str,
     version: Optional[int] = None
 ) -> Optional[PromptExample]:
     """
-    Get a prompt by example_id and optionally specific version.
-    If version is None, gets the prompt with that example_id (exact match).
+    Get a prompt by id and optionally specific version.
+    If version is None, gets the prompt with that id (exact match).
     
     Args:
-        example_id: UUID of the prompt
+        prompt_id: UUID of the prompt
         version: Optional version number
     
     Returns:
@@ -302,22 +339,21 @@ def get_prompt_by_id_and_version(
     session = SessionLocal()
     try:
         if version is None:
-            # Get by exact example_id
+            # Get by exact id
             prompt = session.query(PromptExample).filter(
-                PromptExample.example_id == example_id
+                PromptExample.id == prompt_id
             ).first()
         else:
-            # Get by technique_key + title + version from the base example
+            # Get by key + version from the base example
             base = session.query(PromptExample).filter(
-                PromptExample.example_id == example_id
+                PromptExample.id == prompt_id
             ).first()
             
             if not base:
                 return None
             
             prompt = session.query(PromptExample).filter(
-                PromptExample.technique_key == base.technique_key,
-                PromptExample.title == base.title,
+                PromptExample.key == base.key,
                 PromptExample.version == version
             ).first()
         
@@ -330,17 +366,15 @@ def get_prompt_by_id_and_version(
 
 
 def update_prompt_status(
-    example_id: str,
-    is_enabled: Optional[bool] = None,
-    status: Optional[str] = None
+    prompt_id: str,
+    is_active: Optional[bool] = None
 ) -> Optional[PromptExample]:
     """
-    Update prompt's is_enabled flag and/or status.
+    Update prompt's is_active flag.
     
     Args:
-        example_id: UUID of the prompt
-        is_enabled: New enabled flag (optional)
-        status: New status (optional)
+        prompt_id: UUID of the prompt
+        is_active: New active flag (optional)
     
     Returns:
         Updated PromptExample object or None if not found
@@ -348,17 +382,14 @@ def update_prompt_status(
     session = SessionLocal()
     try:
         prompt = session.query(PromptExample).filter(
-            PromptExample.example_id == example_id
+            PromptExample.id == prompt_id
         ).first()
         
         if not prompt:
             return None
         
-        if is_enabled is not None:
-            prompt.is_enabled = is_enabled
-        
-        if status is not None:
-            prompt.status = status
+        if is_active is not None:
+            prompt.is_active = is_active
         
         session.commit()
         session.refresh(prompt)

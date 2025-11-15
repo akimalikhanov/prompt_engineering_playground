@@ -2,7 +2,7 @@ import os, time, json
 from typing import Generator, Optional, Literal
 import openai
 from utils.sse import sse_pack
-from config.load_configs import _load_models_config
+from utils.load_configs import _load_models_config
 
 def _unified_openai_api_call(
     model: str,

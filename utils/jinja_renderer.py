@@ -90,15 +90,27 @@ def render_messages(
     rendered_messages = []
     all_missing_vars = set()
     all_warnings = []
+    all_used_vars = set()  # Track variables used across ALL messages
+    provided_vars = set(variables.keys())
     
+    # First pass: collect all variables used across all messages
+    for msg in messages:
+        content = msg.get('content', '')
+        expected_vars = extract_variables_from_template(content)
+        all_used_vars.update(expected_vars)
+    
+    # Second pass: render messages and check for missing variables per message
     for i, msg in enumerate(messages):
         content = msg.get('content', '')
         rendered_content, missing_vars, warnings = render_template(content, variables)
         
-        # Collect missing vars and warnings
+        # Collect missing vars (still useful per-message)
         all_missing_vars.update(missing_vars)
-        if warnings:
-            all_warnings.extend([f"Message {i} ({msg.get('role', 'unknown')}): {w}" for w in warnings])
+        
+        # Only add template/syntax errors to warnings (not unused vars per message)
+        for w in warnings:
+            if not w.startswith("Unused variables"):
+                all_warnings.append(f"Message {i} ({msg.get('role', 'unknown')}): {w}")
         
         # Build rendered message
         rendered_msg = {
@@ -106,6 +118,11 @@ def render_messages(
             'content': rendered_content
         }
         rendered_messages.append(rendered_msg)
+    
+    # Check for variables unused across ALL messages
+    unused_vars = provided_vars - all_used_vars
+    if unused_vars:
+        all_warnings.append(f"Unused variables: {', '.join(sorted(unused_vars))}")
     
     return rendered_messages, sorted(list(all_missing_vars)), all_warnings
 

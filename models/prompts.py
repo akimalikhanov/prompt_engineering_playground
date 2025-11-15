@@ -1,8 +1,8 @@
 """
 SQLAlchemy models for app.prompt_techniques and app.prompt_examples tables
 """
-from sqlalchemy import Column, String, Text, Integer, Boolean, TIMESTAMP, text, UniqueConstraint, Index
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import Column, String, Text, Integer, Boolean, TIMESTAMP, text, UniqueConstraint, Index, CheckConstraint
+from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
@@ -27,26 +27,30 @@ class PromptTechnique(Base):
 class PromptExample(Base):
     __tablename__ = "prompt_examples"
     __table_args__ = (
-        UniqueConstraint('technique_key', 'title', 'version', name='prompt_examples_technique_key_title_version_key'),
-        Index('ux_prompt_examples_active', 'technique_key', 'title', 
-              postgresql_where=text("status = 'active'")),
-        Index('idx_prompt_examples_latest', 'technique_key', 'title', 'version'),
+        UniqueConstraint('key', 'version', name='prompt_examples_key_version_key'),
+        CheckConstraint("technique IN ('zero_shot', 'few_shot', 'prompt_chain')", name='prompt_examples_technique_check'),
+        CheckConstraint("response_format IN ('json_object', 'json_schema')", name='prompt_examples_response_format_check'),
         {"schema": "app"}
     )
 
-    example_id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
-    technique_key = Column(Text, nullable=False)
-    title = Column(Text, nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    key = Column(Text, nullable=False)
     version = Column(Integer, nullable=False, server_default=text("1"))
-    status = Column(Text, nullable=False, server_default=text("'active'"))
-    language = Column(Text, nullable=False, server_default=text("'en'"))
-    messages = Column(JSONB, nullable=False)
+    title = Column(Text, nullable=False)
+    description = Column(Text)
+    category = Column(Text)
+    technique = Column(Text, nullable=False)
+    tags = Column(ARRAY(Text), server_default=text("'{}'"))
+    prompt_template = Column(JSONB, nullable=False)  # Messages array: [{"role": "system", "content": "..."}, ...]
     variables = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
-    model_hint = Column(Text)
-    is_enabled = Column(Boolean, nullable=False, server_default=text("true"))
+    default_examples = Column(JSONB)
+    response_format = Column(Text)  # NULL = no structured output, 'json_object' or 'json_schema'
+    json_schema_template = Column(JSONB)  # JSON schema definition (only used when response_format='json_schema')
+    tool_config = Column(JSONB)
+    is_active = Column(Boolean, nullable=False, server_default=text("true"))
     created_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=text("now()"))
     updated_at = Column(TIMESTAMP(timezone=True), nullable=False, server_default=text("now()"))
 
     def __repr__(self):
-        return f"<PromptExample(technique_key='{self.technique_key}', title='{self.title}', version={self.version})>"
+        return f"<PromptExample(key='{self.key}', title='{self.title}', version={self.version})>"
 

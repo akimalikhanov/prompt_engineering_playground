@@ -1,33 +1,25 @@
 import json
 import os
 import time
-from functools import lru_cache
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
 import gradio as gr
 import httpx
 
-from config.load_configs import _load_models_config, _load_gradio_templates
-
-
-@lru_cache(maxsize=1)
-def _load_models() -> Dict[str, Any]:
-    config = _load_models_config()
-    models: List[Dict[str, Any]] = []
-    for model_cfg in config.get("models", []):
-        models.append(
-            {
-                "id": model_cfg["id"],
-                "label": model_cfg["label"],
-                "provider": model_cfg["provider"],
-                "params_override": model_cfg.get("params_override", {}),
-            }
-        )
-    defaults = config.get("defaults", {}).get("params", {})
-    return {
-        "models": models,
-        "defaults": defaults,
-    }
+from utils.load_configs import (
+    _load_models,
+    _load_models_config,
+    _load_gradio_templates,
+    _load_endpoints,
+    _get_default_endpoint_key,
+    _load_delimiter_definitions,
+    _load_response_schema_templates,
+)
+from ui.styles import BADGES_CSS
+from utils.ui_formatters import format_metrics_badges
+from utils.message_utils import _build_messages, _coerce_seed, _build_response_format, _normalize_selection
+from utils.delimiter_utils import RESOLVER_FUNCTIONS, _delim_pair, _insert_pair_at_end, _wrap_entire_message
+from utils.model_params_utils import get_effective_params_for_model, _get_model_special_behavior, _get_param_values_for_model
 
 
 MODELS_DATA = _load_models()
@@ -37,309 +29,17 @@ DEFAULT_MODEL_ID = "gemini-flash-lite" if "gemini-flash-lite" in MODEL_LOOKUP el
 if DEFAULT_MODEL_ID is None:
     raise RuntimeError("No models configured in config/models.yaml")
 
-DEFAULT_API_BASE_URL =os.getenv("API_BASE_URL", "http://localhost:8000")
+DEFAULT_API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
-ENDPOINTS = {
-    "chat": {
-        "label": "Non-streaming JSON (/chat)",
-        "path": "/chat",
-        "stream": False,
-        "sse": False,
-    },
-    "chat.stream": {
-        "label": "Streaming text (/chat.stream)",
-        "path": "/chat.stream",
-        "stream": True,
-        "sse": False,
-    },
-    "chat.streamsse": {
-        "label": "Streaming SSE (/chat.streamsse)",
-        "path": "/chat.streamsse",
-        "stream": True,
-        "sse": True,
-    },
-}
+ENDPOINTS = _load_endpoints()
+DEFAULT_ENDPOINT_KEY = _get_default_endpoint_key()
 
-DEFAULT_ENDPOINT_KEY = "chat.streamsse" if "chat.streamsse" in ENDPOINTS else next(iter(ENDPOINTS.keys()))
-
-BADGES_CSS = """
-.badges {
-    display: flex;
-    gap: 0.4rem;
-    flex-wrap: wrap;
-    align-items: center;
-    margin-top: 0.5rem;
-}
-.badge {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 0.35rem;
-    border-radius: 999px;
-    padding: 0.25rem 0.75rem;
-    font-size: 0.8rem;
-    border: 1px solid rgba(15, 23, 42, 0.16);
-}
-.badge-label {
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    font-size: 0.7rem;
-}
-.badge-value {
-    font-weight: 600;
-}
-@media (prefers-color-scheme: dark) {
-    .badge {
-        border-color: rgba(148, 163, 184, 0.35);
-    }
-    .badge-label {
-    }
-    .badge-value {
-    }
-}
-"""
-
-
-def _render_badge(label: str, value: Optional[str]) -> str:
-    display = value if value is not None else "—"
-    return f"<span class='badge'><span class='badge-label'>{label}</span><span class='badge-value'>{display}</span></span>"
-
-
-def _format_tokens(metrics: Dict[str, Any]) -> Optional[str]:
-    prompt = metrics.get("prompt_tokens")
-    completion = metrics.get("completion_tokens")
-    total = metrics.get("total_tokens")
-    if prompt is None and completion is None and total is None:
-        return None
-    parts = []
-    if prompt is not None or completion is not None:
-        prompt_val = prompt if prompt is not None else "?"
-        completion_val = completion if completion is not None else "?"
-        parts.append(f"{prompt_val}/{completion_val}")
-    if total is not None:
-        parts.append(f"({total})")
-    return " ".join(parts) if parts else str(total)
-
-
-def _format_cost(metrics: Dict[str, Any]) -> Optional[str]:
-    cost = metrics.get("cost_usd")
-    if cost is None:
-        return None
-    return f"${cost:.4f}"
-
-
-def format_metrics_badges(metrics: Optional[Dict[str, Any]], ttft_fallback: Optional[float], latency_fallback: Optional[float]) -> str:
-    metrics = metrics or {}
-    ttft_ms = metrics.get("ttft_ms") or ttft_fallback
-    latency_ms = metrics.get("latency_ms") or latency_fallback
-
-    badges = [
-        _render_badge("TTFT", f"{ttft_ms:.0f} ms" if ttft_ms is not None else None),
-        _render_badge("Latency", f"{latency_ms:.0f} ms" if latency_ms is not None else None),
-        _render_badge("Tokens", _format_tokens(metrics)),
-        _render_badge("Cost", _format_cost(metrics)),
-    ]
-    return f"<div class='badges'>{''.join(badges)}</div>"
-
-
-def _resolve_custom_delimiter(cs: str, ce: str) -> tuple[str, str]:
-    start_token = (cs or "<<<CUSTOM>>>").rstrip()
-    end_token = (ce or "<<<END>>>").lstrip()
-    start = f"{start_token}\n"
-    end = f"\n{end_token}"
-    return start, end
-
-
-def _resolve_markdown_delimiter(cs: str, _: str) -> tuple[str, str]:
-    language = cs.strip()
-    prefix = f"```{language}\n" if language else "```\n"
-    return prefix, "\n```"
-
-
-def _resolve_xml_delimiter(cs: str, _: str) -> tuple[str, str]:
-    tag = cs.strip() or "section"
-    return f"<{tag}>\n", f"\n</{tag}>"
-
-
-# Resolver functions mapped by type
-RESOLVER_FUNCTIONS: Dict[str, Any] = {
-    "markdown": _resolve_markdown_delimiter,
-    "xml": _resolve_xml_delimiter,
-    "custom": _resolve_custom_delimiter,
-}
-
-
-@lru_cache(maxsize=1)
-def _load_delimiter_definitions() -> Dict[str, Dict[str, Any]]:
-    """Load delimiter definitions from YAML and map resolver types to functions."""
-    templates_config = _load_gradio_templates()
-    delimiters_raw = templates_config.get("delimiters", {})
-    
-    # Process each delimiter definition
-    delimiter_definitions: Dict[str, Dict[str, Any]] = {}
-    for key, value in delimiters_raw.items():
-        definition = dict(value)  # Make a copy
-        
-        # If there's a resolver_type, map it to the actual resolver function
-        resolver_type = definition.pop("resolver_type", None)
-        if resolver_type:
-            resolver_func = RESOLVER_FUNCTIONS.get(resolver_type)
-            if resolver_func:
-                definition["resolver"] = resolver_func
-            else:
-                # Fallback: if resolver type not found, treat as static
-                print(f"Warning: Unknown resolver_type '{resolver_type}' for delimiter '{key}'")
-        
-        delimiter_definitions[key] = definition
-    
-    return delimiter_definitions
-
-
+# Load delimiter and schema template configurations
 DELIMITER_DEFINITIONS: Dict[str, Dict[str, Any]] = _load_delimiter_definitions()
-
 DELIMITER_CHOICES: List[str] = list(DELIMITER_DEFINITIONS.keys())
-
-
-@lru_cache(maxsize=1)
-def _load_response_schema_templates() -> Dict[str, Dict[str, Any]]:
-    """Load response schema templates from YAML config."""
-    templates_config = _load_gradio_templates()
-    templates_raw = templates_config.get("response_schema_templates", [])
-    templates_lookup: Dict[str, Dict[str, Any]] = {}
-    
-    for template in templates_raw:
-        label = template.get("label", template.get("id", "Unknown"))
-        templates_lookup[label] = template
-    
-    # Create a lookup dictionary by label, with "Custom..." option
-    templates_lookup.update({
-        "Custom...": {
-            "id": "custom",
-            "label": "Custom...",
-            "custom": True,
-        }
-    })
-    return templates_lookup
-
 
 RESPONSE_SCHEMA_TEMPLATES: Dict[str, Dict[str, Any]] = _load_response_schema_templates()
 RESPONSE_SCHEMA_CHOICES: List[str] = list(RESPONSE_SCHEMA_TEMPLATES.keys())
-
-
-def _build_messages(
-    user_message: str,
-    history: List[Tuple[str, str]],
-    system_prompt: Optional[str],
-    context_prompt: Optional[str],
-) -> List[Dict[str, str]]:
-    messages: List[Dict[str, str]] = []
-    if system_prompt and system_prompt.strip():
-        messages.append({"role": "system", "content": system_prompt.strip()})
-    if context_prompt and context_prompt.strip():
-        messages.append({"role": "user", "content": f"CONTEXT:\n{context_prompt.strip()}\n"})
-    for past_user, past_assistant in history:
-        if past_user:
-            messages.append({"role": "user", "content": past_user})
-        if past_assistant:
-            messages.append({"role": "assistant", "content": past_assistant})
-    messages.append({"role": "user", "content": user_message})
-    return messages
-
-
-def _coerce_seed(seed_text: Optional[str]) -> Optional[int]:
-    if seed_text is None:
-        return None
-    if isinstance(seed_text, (int, float)):
-        try:
-            seed_val = int(seed_text)
-        except ValueError:
-            return None
-        return max(0, seed_val)
-    seed_text = seed_text.strip()
-    if not seed_text:
-        return None
-    try:
-        seed_val = int(seed_text)
-    except ValueError:
-        return None
-    return max(0, seed_val)
-
-
-def _build_response_format(
-    mode: str,
-    strict: bool,
-    schema_code: Optional[str],
-    schema_template_label: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
-    """Build response_format dict from UI inputs.
-    
-    Expected structure for json_schema type:
-    {
-        "type": "json_schema",
-        "json_schema": {
-            "schema": {...},  # The actual JSON schema
-            "strict": true,
-            "name": "SchemaName"  # Required by OpenAI
-        }
-    }
-    """
-    if mode == "None" or not mode:
-        return None
-    
-    if mode == "JSON object":
-        return {"type": "json_object"}
-    
-    if mode == "JSON schema":
-        if not schema_code or not schema_code.strip():
-            return None
-        try:
-            # Parse and validate the JSON schema
-            schema_text = schema_code.strip()
-            json_schema_dict = json.loads(schema_text)
-            
-            # Validate it's actually a dict/object
-            if not isinstance(json_schema_dict, dict):
-                print(f"⚠️ JSON schema must be an object, got: {type(json_schema_dict)}")
-                return None
-            
-            # Extract schema name from template if available
-            schema_name = None
-            if schema_template_label and schema_template_label != "Custom...":
-                template = RESPONSE_SCHEMA_TEMPLATES.get(schema_template_label)
-                if template:
-                    json_schema_config = template.get("json_schema", {})
-                    schema_name = json_schema_config.get("name")
-            
-            # Build json_schema structure - name is required by OpenAI
-            # Use template name if available, otherwise default to "CustomSchema"
-            json_schema_obj = {
-                "schema": json_schema_dict,
-                "strict": strict,
-                "name": schema_name if schema_name else "CustomSchema",  # Required by OpenAI API
-            }
-            
-            # Wrap in the expected structure
-            return {
-                "type": "json_schema",
-                "json_schema": json_schema_obj,
-            }
-        except json.JSONDecodeError as e:
-            # Log the error so user can see it in console/logs
-            error_msg = f"⚠️ Invalid JSON schema: {str(e)}"
-            print(error_msg)
-            # Still return None to skip invalid schema
-            return None
-    
-    return None
-
-
-def _normalize_selection(value: Any) -> Optional[str]:
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        return value.get("value") or value.get("id")
-    if isinstance(value, (list, tuple)) and len(value) >= 2:
-        return value[1]
-    return None
 
 
 def stream_chat(
@@ -424,7 +124,7 @@ def stream_chat(
 
     # Handle response_format
     schema_template_label = _normalize_selection(schema_template) if schema_template else None
-    response_format = _build_response_format(response_mode, strict_schema, schema_code, schema_template_label)
+    response_format = _build_response_format(response_mode, strict_schema, schema_code, schema_template_label, RESPONSE_SCHEMA_TEMPLATES)
     if response_format is not None:
         params["response_format"] = response_format
         # Debug: log what we're sending
@@ -594,33 +294,6 @@ def stream_chat(
     yield running_history, format_metrics_badges(metrics, ttft_ms, final_latency)
 
 
-def _delim_pair(style: str, custom_start: str, custom_end: str) -> tuple[str, str]:
-    style = (style or "").strip()
-    cs = (custom_start or "").strip()
-    ce = (custom_end or "").strip()
-
-    definition = DELIMITER_DEFINITIONS.get(style)
-    if not definition:
-        return "```\n", "\n```"
-
-    resolver = definition.get("resolver")
-    if resolver:
-        return resolver(cs, ce)
-
-    return definition["start"], definition["end"]
-
-
-def _insert_pair_at_end(current_text: str, style: str, cs: str, ce: str) -> str:
-    start, end = _delim_pair(style, cs, ce)
-    current_text = current_text or ""
-    # add a blank line before for readability unless already at a newline or empty
-    prefix = "" if (not current_text or current_text.endswith("\n")) else "\n"
-    return f"{current_text}{prefix}{start}{end}"
-
-def _wrap_entire_message(current_text: str, style: str, cs: str, ce: str) -> str:
-    start, end = _delim_pair(style, cs, ce)
-    current_text = current_text or ""
-    return f"{start}{current_text}\n{end}"
 
 
 # --- Helpers (moved out of build_demo) ---------------------------------------
@@ -644,11 +317,11 @@ def sync_delimiter_inputs(selected_style: str):
 
 
 def handle_insert_end(text, style, cs, ce):
-    return _insert_pair_at_end(text, style, cs, ce)
+    return _insert_pair_at_end(text, style, cs, ce, DELIMITER_DEFINITIONS)
 
 
 def handle_wrap_all(text, style, cs, ce):
-    return _wrap_entire_message(text, style, cs, ce)
+    return _wrap_entire_message(text, style, cs, ce, DELIMITER_DEFINITIONS)
 
 
 def clear_chat_and_metrics():
@@ -704,89 +377,6 @@ def reset_textbox():
     return ""
 
 
-def get_effective_params_for_model(model_id: Optional[str]) -> Dict[str, Any]:
-    """Get effective parameters for a model by merging defaults with params_override.
-    
-    Args:
-        model_id: The model ID, or None to get just defaults
-        
-    Returns:
-        Dict with effective parameter values (temperature, top_p, max_tokens, seed, etc.)
-    """
-    # Start with defaults from models.yaml
-    effective = MODELS_DATA.get("defaults", {}).copy()
-    
-    # Apply model-specific overrides if any
-    if model_id:
-        model_config = MODEL_LOOKUP.get(model_id)
-        if model_config:
-            params_override = model_config.get("params_override", {})
-            if params_override:
-                effective.update(params_override)
-    
-    return effective
-
-
-def _get_model_special_behavior(model_id: str) -> Dict[str, Any]:
-    """Get special behavior configuration for a model (e.g., fixed parameters, disabled UI).
-    
-    This centralizes special-case handling for models that have constraints.
-    Returns a dict mapping parameter names to their special behavior config.
-    """
-    special_behaviors: Dict[str, Dict[str, Any]] = {}
-    
-    # Special handling for o4-mini: temperature must be 1.0 and cannot be changed
-    if model_id == "gpt-o4-mini":
-        special_behaviors["temperature"] = {
-            "value": 1.0,
-            "interactive": False,
-            "label": "Temperature (fixed at 1.0 for o4-mini)"
-        }
-    
-    return special_behaviors
-
-
-def _get_param_values_for_model(model_id: Optional[str]) -> Dict[str, Any]:
-    """Get parameter values for a model, including special behaviors.
-    
-    Returns a dict with parameter values and UI properties (like interactive, label).
-    Used by both initialization and update functions.
-    """
-    defaults = MODELS_DATA.get("defaults", {})
-    effective = get_effective_params_for_model(model_id)
-    special_behaviors = _get_model_special_behavior(model_id) if model_id else {}
-    
-    params = {}
-    
-    # Temperature
-    temp_value = effective.get("temperature", defaults.get("temperature"))
-    temp_special = special_behaviors.get("temperature", {})
-    if "value" in temp_special:
-        temp_value = temp_special["value"]
-    params["temperature"] = {
-        "value": temp_value,
-        "interactive": temp_special.get("interactive", True),
-        "label": temp_special.get("label", "Temperature")
-    }
-    
-    # Top-p
-    params["top_p"] = {
-        "value": effective.get("top_p", defaults.get("top_p"))
-    }
-    
-    # Max tokens
-    max_tokens_value = effective.get("max_tokens", defaults.get("max_tokens"))
-    if max_tokens_value is not None:
-        max_tokens_value = int(max_tokens_value)
-    params["max_tokens"] = {"value": max_tokens_value}
-    
-    # Seed
-    seed_value = effective.get("seed", defaults.get("seed"))
-    params["seed"] = {"value": str(seed_value) if seed_value is not None else ""}
-    
-    return params
-
-
 def update_params_for_model(model_choice: Any):
     """Update all parameter UI components based on selected model.
     
@@ -801,7 +391,7 @@ def update_params_for_model(model_choice: Any):
         (temperature_slider, top_p_slider, max_tokens_slider, seed_textbox)
     """
     normalized_choice = _normalize_selection(model_choice)
-    params = _get_param_values_for_model(normalized_choice)
+    params = _get_param_values_for_model(normalized_choice, MODELS_DATA, MODEL_LOOKUP)
     
     return (
         gr.update(**params["temperature"]),
@@ -901,7 +491,7 @@ def build_demo() -> gr.Blocks:
                             )
                             with gr.Row():
                                 # Initialize parameters based on default model (merge defaults with params_override)
-                                initial_params = _get_param_values_for_model(DEFAULT_MODEL_ID)
+                                initial_params = _get_param_values_for_model(DEFAULT_MODEL_ID, MODELS_DATA, MODEL_LOOKUP)
                                 
                                 temperature_slider = gr.Slider(
                                     label=initial_params["temperature"]["label"],
