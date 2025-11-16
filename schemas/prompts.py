@@ -38,22 +38,33 @@ class CreatePromptRequest(BaseModel):
     """Request to create a new prompt (v1)"""
     model_config = ConfigDict(extra="forbid")
     
-    technique_key: str = Field(min_length=1)
+    key: str = Field(min_length=1)
     title: str = Field(min_length=1)
-    language: Optional[str] = "en"
-    messages: List[PromptMessage] = Field(min_items=1)
+    technique: str = Field(min_length=1)
+    prompt_template: List[PromptMessage] = Field(min_items=1)
+    description: Optional[str] = None
+    category: Optional[str] = None
+    tags: Optional[List[str]] = None
     variables: Optional[List[PromptVariable]] = []
-    model_hint: Optional[str] = None
+    default_examples: Optional[List[Dict[str, Any]]] = None
+    response_format: Optional[str] = None
+    json_schema_template: Optional[Dict[str, Any]] = None
+    tool_config: Optional[Dict[str, Any]] = None
 
 
 class CreateVersionRequest(BaseModel):
     """Request to create a new version of an existing prompt"""
     model_config = ConfigDict(extra="forbid")
     
-    messages: Optional[List[PromptMessage]] = None
+    prompt_template: Optional[List[PromptMessage]] = None
     variables: Optional[List[PromptVariable]] = None
-    model_hint: Optional[str] = None
-    language: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    tags: Optional[List[str]] = None
+    default_examples: Optional[List[Dict[str, Any]]] = None
+    response_format: Optional[str] = None
+    json_schema_template: Optional[Dict[str, Any]] = None
+    tool_config: Optional[Dict[str, Any]] = None
 
 
 class RenderPromptRequest(BaseModel):
@@ -67,8 +78,7 @@ class PatchPromptRequest(BaseModel):
     """Request to update prompt status/enabled flag"""
     model_config = ConfigDict(extra="forbid")
     
-    is_enabled: Optional[bool] = None
-    status: Optional[Literal["active", "archived", "draft"]] = None
+    is_active: Optional[bool] = None
 
 
 # ============================================
@@ -78,16 +88,21 @@ class PromptExampleResponse(BaseModel):
     """Response schema for a prompt example"""
     model_config = ConfigDict(from_attributes=True)
     
-    example_id: UUID
-    technique_key: str
+    id: UUID
+    key: str
     title: str
     version: int
-    status: str
-    language: str
-    messages: List[Dict[str, str]]  # Keep as dict for flexibility
-    variables: List[Dict[str, Any]]  # Keep as dict for flexibility
-    model_hint: Optional[str] = None
-    is_enabled: bool
+    technique: str
+    prompt_template: List[Dict[str, str]]  # Messages array: [{"role": "system", "content": "..."}, ...]
+    variables: List[Dict[str, Any]]  # Variable definitions
+    is_active: bool
+    description: Optional[str] = None
+    category: Optional[str] = None
+    tags: Optional[List[str]] = None
+    default_examples: Optional[List[Dict[str, Any]]] = None
+    response_format: Optional[str] = None
+    json_schema_template: Optional[Dict[str, Any]] = None
+    tool_config: Optional[Dict[str, Any]] = None
     created_at: datetime
     updated_at: datetime
 

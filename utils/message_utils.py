@@ -1,10 +1,10 @@
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 
 def _build_messages(
     user_message: str,
-    history: List[Tuple[str, str]],
+    history: List[Dict[str, str]],
     system_prompt: Optional[str],
     context_prompt: Optional[str],
 ) -> List[Dict[str, str]]:
@@ -13,11 +13,8 @@ def _build_messages(
         messages.append({"role": "system", "content": system_prompt.strip()})
     if context_prompt and context_prompt.strip():
         messages.append({"role": "user", "content": f"CONTEXT:\n{context_prompt.strip()}\n"})
-    for past_user, past_assistant in history:
-        if past_user:
-            messages.append({"role": "user", "content": past_user})
-        if past_assistant:
-            messages.append({"role": "assistant", "content": past_assistant})
+    # Add history messages (already in Dict format)
+    messages.extend(history)
     messages.append({"role": "user", "content": user_message})
     return messages
 

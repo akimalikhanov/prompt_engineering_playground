@@ -33,6 +33,7 @@ from dotenv import load_dotenv
 import os
 import mlflow
 import json
+import logging
 
 load_dotenv()
 

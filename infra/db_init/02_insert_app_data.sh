@@ -58,7 +58,7 @@ ON CONFLICT (key, version) DO NOTHING;
 INSERT INTO app.prompt_examples (key, version, title, description, category, technique, tags, prompt_template, variables, default_examples, response_format, json_schema_template, is_active)
 VALUES
 ('sentiment-classifier', 1, 'Sentiment (pos/neg/neutral)', 'Classify sentiment with few-shot examples', 'classification', 'few_shot', ARRAY['sentiment', 'classification'],
- '[{"role": "system", "content": "Classify sentiment as positive, negative, or neutral. Respond with one label only."}, {"role": "user", "content": "Classify: {{text}}"}]',
+ '[{"role": "system", "content": "Classify sentiment as positive, negative, or neutral. Respond with label, confidence of it and brief explanation, justification of your label."}, {"role": "user", "content": "Classify: {{text}}"}]',
  '[{"name":"text","type":"string","required":true,"default":"","desc":"Sentence to classify"}]',
  '[{"input":"I love this product!","output":"positive"},{"input":"This is the worst.","output":"negative"},{"input":"It is okay, I guess.","output":"neutral"}]',
  NULL,

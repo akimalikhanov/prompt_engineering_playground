@@ -41,7 +41,14 @@ need_cmd bash
 if [ "$CLEAN" = true ]; then
   log "Cleaning storage directories (--clean flag provided)"
   maybe_sudo rm -rf "$POSTGRES_DIR"
-  rm -rf "$MINIO_DIR"
+  # MinIO files may be owned by container (root), so use sudo or Docker
+  if have_sudo && sudo -n true 2>/dev/null; then
+    maybe_sudo rm -rf "$MINIO_DIR"
+  else
+    log "Using Docker to clean MinIO directory (sudo not available)"
+    docker run --rm -v "$(pwd)/$MINIO_DIR:/data" alpine sh -c "rm -rf /data/* /data/.[!.]* /data/..?*" 2>/dev/null || true
+    rm -rf "$MINIO_DIR" 2>/dev/null || true
+  fi
 fi
 
 # --- Folders & permissions ---

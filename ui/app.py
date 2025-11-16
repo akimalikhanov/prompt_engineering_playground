@@ -44,7 +44,7 @@ RESPONSE_SCHEMA_CHOICES: List[str] = list(RESPONSE_SCHEMA_TEMPLATES.keys())
 
 def stream_chat(
     user_message: str,
-    history: List[Tuple[str, str]],
+    history: List[Dict[str, str]],
     model_choice: Any,
     endpoint_choice: Any,
     temperature: float,
@@ -58,10 +58,10 @@ def stream_chat(
     strict_schema: bool,
     schema_code: Optional[str],
     schema_template: Optional[str] = None,
-) -> Generator[Tuple[List[Tuple[str, str]], str], None, None]:
+) -> Generator[Tuple[List[Dict[str, str]], str], None, None]:
     """Stream chat responses. Always yields values, even for errors."""
     history = history or []
-
+    
     if not user_message or not user_message.strip():
         yield history, format_metrics_badges({}, None, None)
         return
@@ -70,8 +70,8 @@ def stream_chat(
     if response_mode == "JSON schema":
         if not schema_code or not schema_code.strip():
             error_msg = "⚠️ JSON schema mode requires a schema. Please enter a valid JSON schema."
-            history = history + [(user_message, error_msg)]
-            yield history, format_metrics_badges({}, None, None)
+            error_history = history + [{"role": "user", "content": user_message}, {"role": "assistant", "content": error_msg}]
+            yield error_history, format_metrics_badges({}, None, None)
             return
         try:
             # Validate JSON before proceeding
@@ -79,29 +79,29 @@ def stream_chat(
             # Also validate it's a dict
             if not isinstance(parsed_schema, dict):
                 error_msg = f"⚠️ JSON schema must be an object/dict, got {type(parsed_schema).__name__}."
-                history = history + [(user_message, error_msg)]
-                yield history, format_metrics_badges({}, None, None)
+                error_history = history + [{"role": "user", "content": user_message}, {"role": "assistant", "content": error_msg}]
+                yield error_history, format_metrics_badges({}, None, None)
                 return
         except json.JSONDecodeError as e:
             error_msg = f"⚠️ Invalid JSON schema: {str(e)}\n\nPlease check your JSON syntax (missing brackets, commas, etc.)."
-            history = history + [(user_message, error_msg)]
-            yield history, format_metrics_badges({}, None, None)
+            error_history = history + [{"role": "user", "content": user_message}, {"role": "assistant", "content": error_msg}]
+            yield error_history, format_metrics_badges({}, None, None)
             return
 
     normalized_choice = _normalize_selection(model_choice)
     model_config = MODEL_LOOKUP.get(normalized_choice) if normalized_choice else None
     if not model_config:
         error_msg = "⚠️ Unknown model selection."
-        history = history + [(user_message, error_msg)]
-        yield history, format_metrics_badges({}, None, None)
+        error_history = history + [{"role": "user", "content": user_message}, {"role": "assistant", "content": error_msg}]
+        yield error_history, format_metrics_badges({}, None, None)
         return
 
     endpoint_key = _normalize_selection(endpoint_choice)
     endpoint_cfg = ENDPOINTS.get(endpoint_key) if endpoint_key else None
     if not endpoint_cfg:
         error_msg = "⚠️ Unknown endpoint selection."
-        history = history + [(user_message, error_msg)]
-        yield history, format_metrics_badges({}, None, None)
+        error_history = history + [{"role": "user", "content": user_message}, {"role": "assistant", "content": error_msg}]
+        yield error_history, format_metrics_badges({}, None, None)
         return
 
     provider_id = model_config["provider"]
@@ -141,7 +141,8 @@ def stream_chat(
         "context_prompt": context_prompt.strip() if context_prompt and context_prompt.strip() else None,
     }
 
-    running_history = history + [(user_message, "")]
+    # Add current user message to history
+    running_history = history + [{"role": "user", "content": user_message}]
     ttft_ms: Optional[float] = None
     metrics: Dict[str, Any] = {}
     start_time = time.perf_counter()
@@ -196,7 +197,13 @@ def stream_chat(
                                     if ttft_ms is None:
                                         ttft_ms = (time.perf_counter() - start_time) * 1000.0
                                     accumulated_response += new_text
-                                    running_history[-1] = (user_message, accumulated_response)
+                                    # Update assistant response in messages format
+                                    # If last message is user (first chunk), append new assistant message
+                                    # Otherwise (subsequent chunks), update existing assistant message
+                                    if running_history[-1].get("role") == "user":
+                                        running_history.append({"role": "assistant", "content": accumulated_response})
+                                    else:
+                                        running_history[-1] = {"role": "assistant", "content": accumulated_response}
                                     latency_now = (time.perf_counter() - start_time) * 1000.0
                                     yield running_history, format_metrics_badges(metrics, ttft_ms, latency_now)
                         # Process any remaining buffer content (incomplete final event)
@@ -223,7 +230,13 @@ def stream_chat(
                                     if ttft_ms is None:
                                         ttft_ms = (time.perf_counter() - start_time) * 1000.0
                                     accumulated_response += new_text
-                                    running_history[-1] = (user_message, accumulated_response)
+                                    # Update assistant response in messages format
+                                    # If last message is user (first chunk), append new assistant message
+                                    # Otherwise (subsequent chunks), update existing assistant message
+                                    if running_history[-1].get("role") == "user":
+                                        running_history.append({"role": "assistant", "content": accumulated_response})
+                                    else:
+                                        running_history[-1] = {"role": "assistant", "content": accumulated_response}
                                     latency_now = (time.perf_counter() - start_time) * 1000.0
                                     yield running_history, format_metrics_badges(metrics, ttft_ms, latency_now)
                     else:
@@ -242,7 +255,13 @@ def stream_chat(
                                 ttft_ms = (time.perf_counter() - start_time) * 1000.0
 
                             accumulated_response += chunk
-                            running_history[-1] = (user_message, accumulated_response)
+                            # Update assistant response in messages format
+                            # If last message is user (first chunk), append new assistant message
+                            # Otherwise (subsequent chunks), update existing assistant message
+                            if running_history[-1].get("role") == "user":
+                                running_history.append({"role": "assistant", "content": accumulated_response})
+                            else:
+                                running_history[-1] = {"role": "assistant", "content": accumulated_response}
                             latency_now = (time.perf_counter() - start_time) * 1000.0
                             yield running_history, format_metrics_badges(metrics, ttft_ms, latency_now)
             else:
@@ -254,9 +273,10 @@ def stream_chat(
 
                 if text:
                     accumulated_response = text
-                    running_history[-1] = (user_message, accumulated_response)
+                    # Add assistant response in messages format
+                    running_history.append({"role": "assistant", "content": accumulated_response})
                 else:
-                    running_history[-1] = (user_message, "⚠️ Empty response body.")
+                    running_history.append({"role": "assistant", "content": "⚠️ Empty response body."})
 
                 if ttft_ms is None and metrics.get("ttft_ms") is not None:
                     ttft_ms = metrics["ttft_ms"]
@@ -276,21 +296,27 @@ def stream_chat(
         if not detail_text:
             detail_text = getattr(response, "reason_phrase", "") or str(http_err)
         error_msg = f"⚠️ API error {response.status_code}: {detail_text}"
-        running_history[-1] = (user_message, error_msg)
+        running_history.append({"role": "assistant", "content": error_msg})
         yield running_history, format_metrics_badges(metrics, ttft_ms, None)
         return
     except httpx.HTTPError as transport_err:
         error_msg = f"⚠️ Connection error: {transport_err}"
-        running_history[-1] = (user_message, error_msg)
+        running_history.append({"role": "assistant", "content": error_msg})
         yield running_history, format_metrics_badges(metrics, ttft_ms, None)
         return
     except Exception as exc:
-        running_history[-1] = (user_message, f"⚠️ Unexpected error: {exc}")
+        running_history.append({"role": "assistant", "content": f"⚠️ Unexpected error: {exc}"})
         yield running_history, format_metrics_badges(metrics, ttft_ms, None)
         return
 
     final_latency = (time.perf_counter() - start_time) * 1000.0
-    running_history[-1] = (user_message, accumulated_response)
+    # Ensure assistant response is in messages format
+    # If last message is user (first chunk), append new assistant message
+    # Otherwise (subsequent chunks), update existing assistant message
+    if running_history[-1].get("role") == "user":
+        running_history.append({"role": "assistant", "content": accumulated_response})
+    else:
+        running_history[-1] = {"role": "assistant", "content": accumulated_response}
     yield running_history, format_metrics_badges(metrics, ttft_ms, final_latency)
 
 
@@ -401,6 +427,211 @@ def update_params_for_model(model_choice: Any):
     )
 
 
+def fetch_prompts(api_base_url: str):
+    """Fetch prompts from the API."""
+    api_url = (api_base_url or DEFAULT_API_BASE_URL).strip()
+    if not api_url:
+        api_url = DEFAULT_API_BASE_URL
+    
+    try:
+        response = httpx.get(f"{api_url.rstrip('/')}/prompts", timeout=10.0)
+        response.raise_for_status()
+        data = response.json()
+        prompts = data.get("prompts", [])
+        
+        # Create choices for dropdown: (label, prompt_id)
+        # Handle both schema field names (example_id, technique_key) and DB field names (id, key)
+        choices = []
+        for p in prompts:
+            prompt_id = p.get('id') or p.get('example_id')
+            prompt_key = p.get('key') or p.get('technique_key', 'unknown')
+            prompt_title = p.get('title', 'Untitled')
+            if prompt_id:
+                choices.append((f"{prompt_title} ({prompt_key})", str(prompt_id)))
+        
+        return gr.update(choices=choices, value=choices[0][1] if choices else None)
+    except Exception as e:
+        return gr.update(choices=[("Error loading prompts", None)], value=None)
+
+
+def load_prompt_details(prompt_id: str, api_base_url: str):
+    """Load details for a selected prompt."""
+    if not prompt_id:
+        return gr.update(value=""), gr.update(value="{}")
+    
+    api_url = (api_base_url or DEFAULT_API_BASE_URL).strip()
+    if not api_url:
+        api_url = DEFAULT_API_BASE_URL
+    
+    try:
+        response = httpx.get(f"{api_url.rstrip('/')}/prompts/{prompt_id}", timeout=10.0)
+        response.raise_for_status()
+        prompt = response.json()
+        
+        # Extract variables and create a default JSON object
+        # Handle both 'prompt_template' (DB) and 'messages' (schema) field names
+        variables = prompt.get("variables", [])
+        default_vars = {}
+        for var in variables:
+            if isinstance(var, dict):
+                var_name = var.get("name", "")
+                var_default = var.get("default", "")
+                if var_name:
+                    default_vars[var_name] = var_default
+        
+        # Create description text
+        desc_parts = []
+        if prompt.get("description"):
+            desc_parts.append(f"**Description:** {prompt.get('description')}")
+        if prompt.get("category"):
+            desc_parts.append(f"**Category:** {prompt.get('category')}")
+        # Handle both 'technique' (DB) and 'technique_key' (schema) field names
+        technique = prompt.get("technique") or prompt.get("technique_key")
+        if technique:
+            desc_parts.append(f"**Technique:** {technique}")
+        if variables:
+            var_names = [v.get("name", "") for v in variables if isinstance(v, dict) and v.get("name")]
+            if var_names:
+                desc_parts.append(f"**Variables:** {', '.join(var_names)}")
+        
+        description_text = "\n\n".join(desc_parts) if desc_parts else "No description available."
+        
+        return gr.update(value=description_text), gr.update(value=json.dumps(default_vars, indent=2))
+    except Exception as e:
+        error_msg = f"Error loading prompt: {str(e)}"
+        return gr.update(value=error_msg), gr.update(value="{}")
+
+
+def render_prompt_template(prompt_id: str, variables_json: str, api_base_url: str):
+    """Render a prompt template with provided variables."""
+    if not prompt_id:
+        return "", "", "⚠️ Please select a prompt first."
+    
+    api_url = (api_base_url or DEFAULT_API_BASE_URL).strip()
+    if not api_url:
+        api_url = DEFAULT_API_BASE_URL
+    
+    try:
+        # Parse variables JSON
+        try:
+            variables = json.loads(variables_json) if variables_json.strip() else {}
+        except json.JSONDecodeError as e:
+            return "", "", f"⚠️ Invalid JSON in variables: {str(e)}"
+        
+        # Call render API
+        response = httpx.post(
+            f"{api_url.rstrip('/')}/prompts/{prompt_id}/render",
+            json={"variables": variables},
+            timeout=10.0
+        )
+        response.raise_for_status()
+        data = response.json()
+        
+        # Extract rendered messages
+        rendered_messages = data.get("rendered_messages", [])
+        if not rendered_messages:
+            return "", "", "⚠️ No rendered messages returned."
+        
+        # Format messages for display (showing roles and content)
+        formatted_parts = []
+        for i, msg in enumerate(rendered_messages, 1):
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            formatted_parts.append(f"[{i}] {role.upper()}:\n{content}")
+        
+        rendered_display = "\n\n" + "="*50 + "\n\n".join(formatted_parts) + "\n\n" + "="*50
+        
+        # Store raw JSON string for pasting
+        rendered_json = json.dumps(rendered_messages, indent=2)
+        
+        # Build status message
+        status_parts = []
+        missing_vars = data.get("missing_vars", [])
+        warnings = data.get("warnings", [])
+        
+        if missing_vars:
+            status_parts.append(f"⚠️ Missing variables: {', '.join(missing_vars)}")
+        if warnings:
+            status_parts.extend([f"⚠️ {w}" for w in warnings])
+        if not missing_vars and not warnings:
+            status_parts.append("✅ Template rendered successfully!")
+        
+        status_msg = "\n".join(status_parts) if status_parts else "✅ Rendered successfully!"
+        
+        return rendered_display, rendered_json, status_msg
+    except httpx.HTTPStatusError as e:
+        error_detail = ""
+        try:
+            error_detail = e.response.json().get("detail", str(e))
+        except:
+            error_detail = str(e)
+        return "", "", f"⚠️ API error: {error_detail}"
+    except Exception as e:
+        return "", "", f"⚠️ Error rendering template: {str(e)}"
+
+
+def paste_template_to_input(rendered_json: str):
+    """Parse the rendered JSON and distribute messages to appropriate fields.
+    
+    - System messages -> system_prompt_box
+    - User messages -> user_input (combined)
+    - Other messages -> included in user_input with role markers
+    """
+    if not rendered_json or not rendered_json.strip():
+        return "", ""
+    
+    try:
+        # Parse the JSON
+        messages = json.loads(rendered_json)
+        if not isinstance(messages, list):
+            return "", ""
+        
+        # Extract messages by role
+        system_messages = []
+        user_messages = []
+        other_messages = []
+        
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            role = msg.get("role", "").lower()
+            content = msg.get("content", "")
+            
+            if not content:
+                continue
+            
+            if role == "system":
+                system_messages.append(content)
+            elif role == "user":
+                user_messages.append(content)
+            else:
+                # Handle assistant, tool, or other roles
+                other_messages.append((role, content))
+        
+        # Combine system messages
+        system_prompt = "\n\n".join(system_messages) if system_messages else ""
+        
+        # Combine user messages and other content
+        user_parts = []
+        
+        # Add other role messages if any (with role markers)
+        for role, content in other_messages:
+            user_parts.append(f"[{role.upper()}]\n{content}")
+        
+        # Add user messages (these are the main content)
+        if user_messages:
+            user_parts.extend(user_messages)
+        
+        user_input_text = "\n\n".join(user_parts) if user_parts else ""
+        
+        return system_prompt, user_input_text
+    except json.JSONDecodeError:
+        # If it's not valid JSON, return empty
+        return "", ""
+    except Exception as e:
+        return "", ""
+
+
 def submit_chat_generator(*args):
     for value in stream_chat(*args):
         yield value
@@ -438,7 +669,7 @@ def build_demo() -> gr.Blocks:
                 chatbot = gr.Chatbot(
                     label="Chat",
                     height=520,
-                    bubble_full_width=False,
+                    type="messages",
                 )
                 user_input = gr.Textbox(
                     label="Your message",
@@ -680,6 +911,79 @@ def build_demo() -> gr.Blocks:
                                     queue=False,
                                 )
 
+                        # --- Prompt Hub tab -------------------------------------
+                        with gr.Tab("Prompt Hub"):
+                            gr.Markdown(
+                                "Browse and use prompt templates from the database. "
+                                "Select a prompt, provide variables as JSON, render it, and paste it into your message."
+                            )
+                            
+                            prompt_dropdown = gr.Dropdown(
+                                label="Select Prompt",
+                                choices=[],
+                                value=None,
+                                interactive=True,
+                            )
+                            
+                            prompt_description = gr.Markdown(
+                                value="Select a prompt to see its details.",
+                                label="Prompt Details"
+                            )
+                            
+                            variables_json = gr.Code(
+                                label="Variables (JSON)",
+                                language="json",
+                                value="{}",
+                                lines=8,
+                            )
+                            
+                            with gr.Row():
+                                render_btn = gr.Button(
+                                    "Render Template", variant="primary"
+                                )
+                                paste_btn = gr.Button(
+                                    "Paste template", variant="secondary"
+                                )
+                            
+                            rendered_output = gr.Textbox(
+                                label="Rendered Template",
+                                lines=10,
+                                interactive=False,
+                                placeholder="Rendered template will appear here..."
+                            )
+                            
+                            # Hidden component to store raw JSON for pasting
+                            rendered_json_hidden = gr.Textbox(
+                                visible=False,
+                            )
+                            
+                            render_status = gr.Markdown(
+                                value="",
+                                label="Render Status"
+                            )
+                            
+                            # Wire up the events
+                            prompt_dropdown.change(
+                                load_prompt_details,
+                                inputs=[prompt_dropdown, api_base_box],
+                                outputs=[prompt_description, variables_json],
+                                queue=False,
+                            )
+                            
+                            render_btn.click(
+                                render_prompt_template,
+                                inputs=[prompt_dropdown, variables_json, api_base_box],
+                                outputs=[rendered_output, rendered_json_hidden, render_status],
+                                queue=False,
+                            )
+                            
+                            paste_btn.click(
+                                paste_template_to_input,
+                                inputs=[rendered_json_hidden],
+                                outputs=[system_prompt_box, user_input],
+                                queue=False,
+                            )
+
                         # --- (Optional) More tabs later: Tools / Functions / RAG etc.
                         # with gr.Tab("Advanced"):
                         #     ...
@@ -727,6 +1031,14 @@ def build_demo() -> gr.Blocks:
             update_params_for_model,
             inputs=[model_dropdown],
             outputs=[temperature_slider, top_p_slider, max_tokens_slider, seed_text],
+            queue=False,
+        )
+
+        # Automatically load prompts when the demo loads
+        demo.load(
+            fetch_prompts,
+            inputs=[api_base_box],
+            outputs=[prompt_dropdown],
             queue=False,
         )
 
