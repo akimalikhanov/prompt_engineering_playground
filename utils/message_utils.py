@@ -123,3 +123,38 @@ def _normalize_selection(value: Any) -> Optional[str]:
         return value[1]
     return None
 
+
+def split_rendered_messages_for_ui(rendered_messages: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Split rendered messages into UI fields: system, user, extras (other roles)."""
+    system_messages: List[str] = []
+    user_messages: List[str] = []
+    other_messages: List[str] = []
+
+    for msg in rendered_messages:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role", "")).lower()
+        content = msg.get("content", "")
+        if not content:
+            continue
+        if role == "system":
+            system_messages.append(content)
+        elif role == "user":
+            user_messages.append(content)
+        else:
+            other_messages.append(f"[{role.upper()}]\n{content}")
+
+    system_text = "\n\n".join(system_messages) if system_messages else ""
+    user_parts: List[str] = []
+    if other_messages:
+        user_parts.extend(other_messages)
+    if user_messages:
+        user_parts.extend(user_messages)
+    user_text = "\n\n".join(user_parts) if user_parts else ""
+
+    return {
+        "system_text": system_text,
+        "user_text": user_text,
+    }
+
+

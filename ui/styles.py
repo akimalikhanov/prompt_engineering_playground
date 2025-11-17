@@ -36,3 +36,12 @@ BADGES_CSS = """
 }
 """
 
+TEXTAREA_SCROLL_CSS = """
+/* Make all Textbox textareas scrollable with a reasonable max height */
+.scroll-text textarea {
+    max-height: 320px;      /* adjust as needed */
+    overflow: auto !important;
+    resize: vertical;       /* allow user to expand if they want */
+}
+"""
+

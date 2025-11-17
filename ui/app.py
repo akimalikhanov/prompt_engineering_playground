@@ -15,11 +15,15 @@ from utils.load_configs import (
     _load_delimiter_definitions,
     _load_response_schema_templates,
 )
-from ui.styles import BADGES_CSS
+from ui.styles import BADGES_CSS, TEXTAREA_SCROLL_CSS
 from utils.ui_formatters import format_metrics_badges
-from utils.message_utils import _build_messages, _coerce_seed, _build_response_format, _normalize_selection
+from utils.message_utils import _build_messages, _coerce_seed, _build_response_format, _normalize_selection, split_rendered_messages_for_ui
 from utils.delimiter_utils import RESOLVER_FUNCTIONS, _delim_pair, _insert_pair_at_end, _wrap_entire_message
 from utils.model_params_utils import get_effective_params_for_model, _get_model_special_behavior, _get_param_values_for_model
+from utils.http import resolve_api_base
+from utils.prompts_client import list_prompts, get_prompt, render_prompt
+from utils.render_formatters import format_prompt_details, format_render_preview, format_render_status
+from utils.response_schema_utils import build_schema_from_template, extract_response_format_from_prompt
 
 
 MODELS_DATA = _load_models()
@@ -61,6 +65,19 @@ def stream_chat(
 ) -> Generator[Tuple[List[Dict[str, str]], str], None, None]:
     """Stream chat responses. Always yields values, even for errors."""
     history = history or []
+    # Sanitize history to only allowed fields and ensure string content
+    sanitized_history: List[Dict[str, str]] = []
+    for m in history:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        content = m.get("content")
+        if role is None or content is None:
+            continue
+        # Coerce to strings
+        role_str = str(role)
+        content_str = str(content)
+        sanitized_history.append({"role": role_str, "content": content_str})
     
     if not user_message or not user_message.strip():
         yield history, format_metrics_badges({}, None, None)
@@ -105,7 +122,7 @@ def stream_chat(
         return
 
     provider_id = model_config["provider"]
-    payload_messages = _build_messages(user_message, history, system_prompt, context_prompt)
+    payload_messages = _build_messages(user_message, sanitized_history, system_prompt, context_prompt)
 
     api_url = (api_base_url or DEFAULT_API_BASE_URL).strip()
     if not api_url:
@@ -351,52 +368,13 @@ def handle_wrap_all(text, style, cs, ce):
 
 
 def clear_chat_and_metrics():
-    return [], format_metrics_badges({}, None, None)
+    """Clear chat, metrics, and reset key input fields to defaults."""
+    return [], format_metrics_badges({}, None, None), "", "", "", "None"
 
 
 def on_schema_template_change(template_label: str, current_strict: bool) -> Tuple[str, bool]:
-    """Handle schema template selection.
-    
-    When a template is selected, convert its schema to JSON and update the code editor.
-    For "Custom", return empty template.
-    
-    Args:
-        template_label: Selected template label from dropdown
-        current_strict: Current value of strict checkbox
-        
-    Returns:
-        Tuple of (schema_json_string, strict_checkbox_value)
-    """
-    if not template_label or template_label == "Custom...":
-        # Return empty template for custom
-        default_schema = {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {},
-            "required": []
-        }
-        return json.dumps(default_schema, indent=2), current_strict
-    
-    template = RESPONSE_SCHEMA_TEMPLATES.get(template_label)
-    if not template:
-        # Fallback if template not found
-        default_schema = {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {},
-            "required": []
-        }
-        return json.dumps(default_schema, indent=2), current_strict
-    
-    # Extract schema from template (it's already a dict from YAML)
-    json_schema_config = template.get("json_schema", {})
-    schema_dict = json_schema_config.get("schema", {})
-    
-    # Convert dict to JSON string with indentation
-    schema_json = json.dumps(schema_dict, indent=2)
-    
-    # Keep current strict value unchanged
-    return schema_json, current_strict
+    """Handle schema template selection via utils."""
+    return build_schema_from_template(template_label, RESPONSE_SCHEMA_TEMPLATES, current_strict)
 
 
 def reset_textbox():
@@ -429,21 +407,15 @@ def update_params_for_model(model_choice: Any):
 
 def fetch_prompts(api_base_url: str):
     """Fetch prompts from the API."""
-    api_url = (api_base_url or DEFAULT_API_BASE_URL).strip()
-    if not api_url:
-        api_url = DEFAULT_API_BASE_URL
-    
     try:
-        response = httpx.get(f"{api_url.rstrip('/')}/prompts", timeout=10.0)
-        response.raise_for_status()
-        data = response.json()
-        prompts = data.get("prompts", [])
+        api_url = resolve_api_base(api_base_url, DEFAULT_API_BASE_URL)
+        prompts = list_prompts(api_url)
         
         # Create choices for dropdown: (label, prompt_id)
-        # Handle both schema field names (example_id, technique_key) and DB field names (id, key)
+        # Use current schema field names (id, key) and allow technique_key for label fallback
         choices = []
         for p in prompts:
-            prompt_id = p.get('id') or p.get('example_id')
+            prompt_id = p.get('id')
             prompt_key = p.get('key') or p.get('technique_key', 'unknown')
             prompt_title = p.get('title', 'Untitled')
             if prompt_id:
@@ -459,44 +431,11 @@ def load_prompt_details(prompt_id: str, api_base_url: str):
     if not prompt_id:
         return gr.update(value=""), gr.update(value="{}")
     
-    api_url = (api_base_url or DEFAULT_API_BASE_URL).strip()
-    if not api_url:
-        api_url = DEFAULT_API_BASE_URL
-    
     try:
-        response = httpx.get(f"{api_url.rstrip('/')}/prompts/{prompt_id}", timeout=10.0)
-        response.raise_for_status()
-        prompt = response.json()
-        
-        # Extract variables and create a default JSON object
-        # Handle both 'prompt_template' (DB) and 'messages' (schema) field names
-        variables = prompt.get("variables", [])
-        default_vars = {}
-        for var in variables:
-            if isinstance(var, dict):
-                var_name = var.get("name", "")
-                var_default = var.get("default", "")
-                if var_name:
-                    default_vars[var_name] = var_default
-        
-        # Create description text
-        desc_parts = []
-        if prompt.get("description"):
-            desc_parts.append(f"**Description:** {prompt.get('description')}")
-        if prompt.get("category"):
-            desc_parts.append(f"**Category:** {prompt.get('category')}")
-        # Handle both 'technique' (DB) and 'technique_key' (schema) field names
-        technique = prompt.get("technique") or prompt.get("technique_key")
-        if technique:
-            desc_parts.append(f"**Technique:** {technique}")
-        if variables:
-            var_names = [v.get("name", "") for v in variables if isinstance(v, dict) and v.get("name")]
-            if var_names:
-                desc_parts.append(f"**Variables:** {', '.join(var_names)}")
-        
-        description_text = "\n\n".join(desc_parts) if desc_parts else "No description available."
-        
-        return gr.update(value=description_text), gr.update(value=json.dumps(default_vars, indent=2))
+        api_url = resolve_api_base(api_base_url, DEFAULT_API_BASE_URL)
+        prompt = get_prompt(api_url, prompt_id)
+        description_text, variables_json = format_prompt_details(prompt)
+        return gr.update(value=description_text), gr.update(value=variables_json)
     except Exception as e:
         error_msg = f"Error loading prompt: {str(e)}"
         return gr.update(value=error_msg), gr.update(value="{}")
@@ -507,10 +446,6 @@ def render_prompt_template(prompt_id: str, variables_json: str, api_base_url: st
     if not prompt_id:
         return "", "", "⚠️ Please select a prompt first."
     
-    api_url = (api_base_url or DEFAULT_API_BASE_URL).strip()
-    if not api_url:
-        api_url = DEFAULT_API_BASE_URL
-    
     try:
         # Parse variables JSON
         try:
@@ -518,45 +453,23 @@ def render_prompt_template(prompt_id: str, variables_json: str, api_base_url: st
         except json.JSONDecodeError as e:
             return "", "", f"⚠️ Invalid JSON in variables: {str(e)}"
         
-        # Call render API
-        response = httpx.post(
-            f"{api_url.rstrip('/')}/prompts/{prompt_id}/render",
-            json={"variables": variables},
-            timeout=10.0
-        )
-        response.raise_for_status()
-        data = response.json()
+        api_url = resolve_api_base(api_base_url, DEFAULT_API_BASE_URL)
+        data = render_prompt(api_url, prompt_id, variables)
         
         # Extract rendered messages
         rendered_messages = data.get("rendered_messages", [])
         if not rendered_messages:
             return "", "", "⚠️ No rendered messages returned."
         
-        # Format messages for display (showing roles and content)
-        formatted_parts = []
-        for i, msg in enumerate(rendered_messages, 1):
-            role = msg.get("role", "unknown")
-            content = msg.get("content", "")
-            formatted_parts.append(f"[{i}] {role.upper()}:\n{content}")
-        
-        rendered_display = "\n\n" + "="*50 + "\n\n".join(formatted_parts) + "\n\n" + "="*50
+        rendered_display = format_render_preview(rendered_messages, variables)
         
         # Store raw JSON string for pasting
         rendered_json = json.dumps(rendered_messages, indent=2)
         
         # Build status message
-        status_parts = []
         missing_vars = data.get("missing_vars", [])
         warnings = data.get("warnings", [])
-        
-        if missing_vars:
-            status_parts.append(f"⚠️ Missing variables: {', '.join(missing_vars)}")
-        if warnings:
-            status_parts.extend([f"⚠️ {w}" for w in warnings])
-        if not missing_vars and not warnings:
-            status_parts.append("✅ Template rendered successfully!")
-        
-        status_msg = "\n".join(status_parts) if status_parts else "✅ Rendered successfully!"
+        status_msg = format_render_status(missing_vars, warnings)
         
         return rendered_display, rendered_json, status_msg
     except httpx.HTTPStatusError as e:
@@ -570,66 +483,44 @@ def render_prompt_template(prompt_id: str, variables_json: str, api_base_url: st
         return "", "", f"⚠️ Error rendering template: {str(e)}"
 
 
-def paste_template_to_input(rendered_json: str):
+def paste_template_to_input(rendered_json: str, prompt_id: str = None, api_base_url: str = None):
     """Parse the rendered JSON and distribute messages to appropriate fields.
     
     - System messages -> system_prompt_box
     - User messages -> user_input (combined)
     - Other messages -> included in user_input with role markers
+    - response_format and json_schema_template -> response_mode and schema_code
     """
     if not rendered_json or not rendered_json.strip():
-        return "", ""
+        return "", "", "None", ""
     
     try:
-        # Parse the JSON
         messages = json.loads(rendered_json)
         if not isinstance(messages, list):
-            return "", ""
+            return "", "", "None", ""
+
+        split = split_rendered_messages_for_ui(messages)
+        system_prompt = split.get("system_text", "")
+        user_input_text = split.get("user_text", "")
+
+        # Fetch prompt details to get response_format and json_schema_template
+        response_mode = "None"
+        schema_code = ""
         
-        # Extract messages by role
-        system_messages = []
-        user_messages = []
-        other_messages = []
-        
-        for msg in messages:
-            if not isinstance(msg, dict):
-                continue
-            role = msg.get("role", "").lower()
-            content = msg.get("content", "")
-            
-            if not content:
-                continue
-            
-            if role == "system":
-                system_messages.append(content)
-            elif role == "user":
-                user_messages.append(content)
-            else:
-                # Handle assistant, tool, or other roles
-                other_messages.append((role, content))
-        
-        # Combine system messages
-        system_prompt = "\n\n".join(system_messages) if system_messages else ""
-        
-        # Combine user messages and other content
-        user_parts = []
-        
-        # Add other role messages if any (with role markers)
-        for role, content in other_messages:
-            user_parts.append(f"[{role.upper()}]\n{content}")
-        
-        # Add user messages (these are the main content)
-        if user_messages:
-            user_parts.extend(user_messages)
-        
-        user_input_text = "\n\n".join(user_parts) if user_parts else ""
-        
-        return system_prompt, user_input_text
+        if prompt_id:
+            try:
+                api_url = resolve_api_base(api_base_url, DEFAULT_API_BASE_URL)
+                prompt = get_prompt(api_url, prompt_id)
+                response_mode, schema_code = extract_response_format_from_prompt(prompt)
+            except Exception:
+                # If we can't fetch prompt details, just use defaults
+                pass
+        return system_prompt, user_input_text, response_mode, schema_code
     except json.JSONDecodeError:
         # If it's not valid JSON, return empty
-        return "", ""
+        return "", "", "None", ""
     except Exception as e:
-        return "", ""
+        return "", "", "None", ""
 
 
 def submit_chat_generator(*args):
@@ -654,7 +545,7 @@ def build_demo() -> gr.Blocks:
     defaults = MODELS_DATA["defaults"]
 
     with gr.Blocks(
-        css=BADGES_CSS,
+        css=BADGES_CSS + TEXTAREA_SCROLL_CSS,
         theme=gr.themes.Ocean(primary_hue="emerald"),
         title="Prompt Engineering Playground",
     ) as demo:
@@ -670,6 +561,7 @@ def build_demo() -> gr.Blocks:
                     label="Chat",
                     height=520,
                     type="messages",
+                    show_copy_button=True,
                 )
                 user_input = gr.Textbox(
                     label="Your message",
@@ -677,6 +569,7 @@ def build_demo() -> gr.Blocks:
                     autofocus=True,
                     lines=3,
                     elem_id="prompt-input",
+                    elem_classes=["scroll-text"],
                 )
                 with gr.Row():
                     send_button = gr.Button(
@@ -710,6 +603,7 @@ def build_demo() -> gr.Blocks:
                             label="API base URL",
                             value=DEFAULT_API_BASE_URL,
                             placeholder="http://localhost:8000",
+                            elem_classes=["scroll-text"],
                         )
 
                     # Tabs for logical grouping
@@ -717,8 +611,11 @@ def build_demo() -> gr.Blocks:
                         # --- Generation tab ------------------------------------
                         with gr.Tab("Generation"):
                             gr.Markdown(
-                                "Control sampling behavior. Lower temperature/top-p "
-                                "for more deterministic outputs; higher for more creative."
+                                "Tune how the model generates output.\n\n"
+                                "- **Temperature**: controls creativity (lower is more focused, higher is more diverse).\n"
+                                "- **Top‑p (nucleus)**: limits sampling to the most probable tokens for steadier output.\n"
+                                "- **Max tokens**: caps the response length.\n"
+                                "- **Seed**: optionally set to make results more reproducible with the same inputs and parameters.\n"
                             )
                             with gr.Row():
                                 # Initialize parameters based on default model (merge defaults with params_override)
@@ -753,6 +650,7 @@ def build_demo() -> gr.Blocks:
                                     label="Seed (optional)",
                                     placeholder="e.g. 42",
                                     value=initial_params["seed"]["value"],
+                                    elem_classes=["scroll-text"],
                                 )
 
                             # --- Structured output (response_format) ------------
@@ -836,6 +734,7 @@ def build_demo() -> gr.Blocks:
                                 label="System prompt (optional)",
                                 placeholder="Add global instructions, tone, or role.",
                                 lines=3,
+                                elem_classes=["scroll-text"],
                             )
 
                             context_box = gr.Textbox(
@@ -846,6 +745,7 @@ def build_demo() -> gr.Blocks:
                                     "message before your main question."
                                 ),
                                 lines=3,
+                                elem_classes=["scroll-text"],
                             )
 
                             with gr.Accordion("Delimiters (advanced)", open=False):
@@ -866,11 +766,13 @@ def build_demo() -> gr.Blocks:
                                         label="Custom start",
                                         placeholder="e.g. [[[INSTRUCT]]]",
                                         visible=False,
+                                        elem_classes=["scroll-text"],
                                     )
                                     custom_end_tb = gr.Textbox(
                                         label="Custom end",
                                         placeholder="e.g. [[[/INSTRUCT]]]",
                                         visible=False,
+                                        elem_classes=["scroll-text"],
                                     )
 
                                 delim_pair_dd.change(
@@ -914,8 +816,18 @@ def build_demo() -> gr.Blocks:
                         # --- Prompt Hub tab -------------------------------------
                         with gr.Tab("Prompt Hub"):
                             gr.Markdown(
-                                "Browse and use prompt templates from the database. "
-                                "Select a prompt, provide variables as JSON, render it, and paste it into your message."
+                                "Prompt Hub lets you load reusable prompt templates.\n\n"
+                                "- Select a prompt from the list.\n"
+                                "- Simple mode: fill up to 6 variables in the textboxes (multiline supported).\n"
+                                "- Few-shot: if available, click “Paste examples to Context” to add [EXAMPLES].\n"
+                                "- Click Render to preview rendered template, then Paste to send to chat.\n"
+                                "- Advanced JSON: toggle to edit the raw variables JSON directly."
+                            )
+                            
+                            # Advanced/Simple toggle
+                            advanced_mode_ckb = gr.Checkbox(
+                                label="Advanced JSON",
+                                value=False,
                             )
                             
                             prompt_dropdown = gr.Dropdown(
@@ -935,7 +847,24 @@ def build_demo() -> gr.Blocks:
                                 language="json",
                                 value="{}",
                                 lines=8,
+                                visible=False,  # hidden in Simple mode by default
                             )
+                            
+                            # --- Simple mode inputs (auto-built from variables) ---
+                            with gr.Group(visible=True) as simple_mode_group:
+                                # We'll support up to 12 variables as textboxes (shows only what template defines)
+                                var_name_hidden_1 = gr.Textbox(visible=False)
+                                var_name_hidden_2 = gr.Textbox(visible=False)
+                                var_name_hidden_3 = gr.Textbox(visible=False)
+                                var_name_hidden_4 = gr.Textbox(visible=False)
+                                var_name_hidden_5 = gr.Textbox(visible=False)
+                                var_name_hidden_6 = gr.Textbox(visible=False)
+                                var_value_tb_1 = gr.Textbox(label="var_1", lines=3, visible=False, elem_classes=["scroll-text"])
+                                var_value_tb_2 = gr.Textbox(label="var_2", lines=3, visible=False, elem_classes=["scroll-text"])
+                                var_value_tb_3 = gr.Textbox(label="var_3", lines=3, visible=False, elem_classes=["scroll-text"])
+                                var_value_tb_4 = gr.Textbox(label="var_4", lines=3, visible=False, elem_classes=["scroll-text"])
+                                var_value_tb_5 = gr.Textbox(label="var_5", lines=3, visible=False, elem_classes=["scroll-text"])
+                                var_value_tb_6 = gr.Textbox(label="var_6", lines=3, visible=False, elem_classes=["scroll-text"])
                             
                             with gr.Row():
                                 render_btn = gr.Button(
@@ -944,17 +873,29 @@ def build_demo() -> gr.Blocks:
                                 paste_btn = gr.Button(
                                     "Paste template", variant="secondary"
                                 )
+                            # This button appears only for few_shot technique
+                            paste_examples_btn = gr.Button(
+                                "Paste examples to Context", variant="secondary", visible=False
+                            )
                             
                             rendered_output = gr.Textbox(
                                 label="Rendered Template",
                                 lines=10,
                                 interactive=False,
                                 placeholder="Rendered template will appear here..."
+                                ,
+                                elem_classes=["scroll-text"],
                             )
                             
                             # Hidden component to store raw JSON for pasting
                             rendered_json_hidden = gr.Textbox(
                                 visible=False,
+                                elem_classes=["scroll-text"],
+                            )
+                            # Hidden component to store formatted examples text
+                            examples_text_hidden = gr.Textbox(
+                                visible=False,
+                                elem_classes=["scroll-text"],
                             )
                             
                             render_status = gr.Markdown(
@@ -962,25 +903,214 @@ def build_demo() -> gr.Blocks:
                                 label="Render Status"
                             )
                             
+                            # --- Functions for Simple/Advanced behavior -----------
+                            def load_prompt_details_and_simple_fields(prompt_id: str, api_base_url: str):
+                                """Load prompt details, JSON defaults, and configure simple-mode fields."""
+                                if not prompt_id:
+                                    # Reset UI to defaults
+                                    return (
+                                        gr.update(value="Select a prompt to see its details."),
+                                        gr.update(value="{}"),
+                                        gr.update(value=""),
+                                        # Clear all variable fields
+                                        gr.update(value=""), gr.update(visible=False, label="var_1", value=""),
+                                        gr.update(value=""), gr.update(visible=False, label="var_2", value=""),
+                                        gr.update(value=""), gr.update(visible=False, label="var_3", value=""),
+                                        gr.update(value=""), gr.update(visible=False, label="var_4", value=""),
+                                        gr.update(value=""), gr.update(visible=False, label="var_5", value=""),
+                                        gr.update(value=""), gr.update(visible=False, label="var_6", value=""),
+                                        gr.update(visible=False),  # paste_examples_btn visibility
+                                    )
+                                try:
+                                    api_url = resolve_api_base(api_base_url, DEFAULT_API_BASE_URL)
+                                    prompt = get_prompt(api_url, prompt_id)
+                                    description_text, defaults_json = format_prompt_details(prompt)
+                                    # Build examples text for context
+                                    examples = prompt.get("default_examples")
+                                    examples_text = ""
+                                    if examples:
+                                        try:
+                                            examples_text = "[EXAMPLES]\n\n" + json.dumps(examples, indent=2)
+                                        except Exception:
+                                            examples_text = "[EXAMPLES]\n\n" + str(examples)
+                                    # Determine technique for button visibility
+                                    technique_val = (prompt.get("technique") or prompt.get("technique_key") or "").strip().lower()
+                                    show_examples_btn = technique_val == "few_shot"
+                                    # Build variable fields strictly from template variables
+                                    variables = prompt.get("variables", []) or []
+                                    # Helper to build updates for one slot
+                                    def slot_updates(var_def):
+                                        if var_def:
+                                            label = var_def.get("name") or "variable"
+                                            default_val = var_def.get("default", "")
+                                            return gr.update(value=label), gr.update(visible=True, label=label, value=default_val)
+                                        else:
+                                            return gr.update(value=""), gr.update(visible=False, label="var", value="")
+                                    slots = []
+                                    for i in range(6):
+                                        var_def = variables[i] if i < len(variables) else None
+                                        slots.extend(slot_updates(var_def))
+                                    return (
+                                        gr.update(value=description_text),
+                                        gr.update(value=defaults_json),
+                                        gr.update(value=examples_text),
+                                        *slots,
+                                        gr.update(visible=show_examples_btn),
+                                    )
+                                except Exception as e:
+                                    error_msg = f"Error loading prompt: {str(e)}"
+                                    return (
+                                        gr.update(value=error_msg),
+                                        gr.update(value="{}"),
+                                        gr.update(value=""),
+                                        gr.update(value=""), gr.update(visible=False, label="var_1", value=""),
+                                        gr.update(value=""), gr.update(visible=False, label="var_2", value=""),
+                                        gr.update(value=""), gr.update(visible=False, label="var_3", value=""),
+                                        gr.update(value=""), gr.update(visible=False, label="var_4", value=""),
+                                        gr.update(value=""), gr.update(visible=False, label="var_5", value=""),
+                                        gr.update(value=""), gr.update(visible=False, label="var_6", value=""),
+                                        gr.update(visible=False),
+                                    )
+                            
+                            def toggle_advanced_mode(is_advanced: bool):
+                                """Show/hide simple inputs vs raw JSON editor."""
+                                return (
+                                    gr.update(visible=is_advanced),   # variables_json
+                                    gr.update(visible=not is_advanced),  # simple_mode_group
+                                )
+                            
+                            def render_template_with_modes(
+                                prompt_id: str,
+                                is_advanced: bool,
+                                variables_json_str: str,
+                                context_text: str,
+                                vn1: str, vv1: str,
+                                vn2: str, vv2: str,
+                                vn3: str, vv3: str,
+                                vn4: str, vv4: str,
+                                vn5: str, vv5: str,
+                                vn6: str, vv6: str,
+                                api_base_url: str,
+                            ):
+                                """Render, building variables from simple fields if not advanced."""
+                                try:
+                                    api_url = resolve_api_base(api_base_url, DEFAULT_API_BASE_URL)
+                                    if is_advanced:
+                                        # Use JSON as-is
+                                        try:
+                                            variables = json.loads(variables_json_str) if variables_json_str.strip() else {}
+                                        except json.JSONDecodeError as e:
+                                            return "", "", f"⚠️ Invalid JSON in variables: {str(e)}"
+                                    else:
+                                        variables = {}
+                                        name_vals = [
+                                            (vn1, vv1), (vn2, vv2), (vn3, vv3), (vn4, vv4),
+                                            (vn5, vv5), (vn6, vv6),
+                                        ]
+                                        for n, v in name_vals:
+                                            if (n or "").strip():
+                                                variables[n.strip()] = v if v is not None else ""
+                                    # Call API
+                                    data = render_prompt(api_url, prompt_id, variables)
+                                    rendered_messages = data.get("rendered_messages", [])
+                                    if not rendered_messages:
+                                        return "", "", "⚠️ No rendered messages returned."
+                                    # Build ordered preview: SYSTEM, EXAMPLES (if present in context), then others (USER, etc.)
+                                    system_blocks = []
+                                    other_blocks = []
+                                    for msg in rendered_messages:
+                                        role = (msg.get("role") or "unknown").lower()
+                                        content = msg.get("content", "")
+                                        if role == "system":
+                                            system_blocks.append(f"[SYSTEM]\n{content}")
+                                        else:
+                                            other_blocks.append(f"[{role.upper()}]\n{content}")
+                                    parts = []
+                                    if system_blocks:
+                                        parts.append("\n\n".join(system_blocks))
+                                    # Only show EXAMPLES if user pasted them into Context
+                                    ctx = (context_text or "").strip()
+                                    if ctx.startswith("[EXAMPLES]"):
+                                        parts.append(ctx)
+                                    if other_blocks:
+                                        parts.append("\n\n".join(other_blocks))
+                                    rendered_display = "\n\n".join(parts) if parts else ""
+                                    rendered_json = json.dumps(rendered_messages, indent=2)
+                                    missing_vars = data.get("missing_vars", [])
+                                    warnings = data.get("warnings", [])
+                                    status_msg = format_render_status(missing_vars, warnings)
+                                    return rendered_display, rendered_json, status_msg
+                                except httpx.HTTPStatusError as e:
+                                    error_detail = ""
+                                    try:
+                                        error_detail = e.response.json().get("detail", str(e))
+                                    except:
+                                        error_detail = str(e)
+                                    return "", "", f"⚠️ API error: {error_detail}"
+                                except Exception as e:
+                                    return "", "", f"⚠️ Error rendering template: {str(e)}"
+                            
+                            def paste_examples_to_context(examples_text: str, current_context: str):
+                                """Override Context with formatted examples under [EXAMPLES] header."""
+                                ex = (examples_text or "").strip()
+                                return ex
+                            
                             # Wire up the events
                             prompt_dropdown.change(
-                                load_prompt_details,
+                                load_prompt_details_and_simple_fields,
                                 inputs=[prompt_dropdown, api_base_box],
-                                outputs=[prompt_description, variables_json],
+                                outputs=[
+                                    prompt_description, variables_json, examples_text_hidden,
+                                    # 6 slots: name hidden + textbox per slot
+                                    var_name_hidden_1, var_value_tb_1,
+                                    var_name_hidden_2, var_value_tb_2,
+                                    var_name_hidden_3, var_value_tb_3,
+                                    var_name_hidden_4, var_value_tb_4,
+                                    var_name_hidden_5, var_value_tb_5,
+                                    var_name_hidden_6, var_value_tb_6,
+                                    paste_examples_btn,
+                                ],
+                                queue=False,
+                            )
+                            
+                            advanced_mode_ckb.change(
+                                toggle_advanced_mode,
+                                inputs=[advanced_mode_ckb],
+                                outputs=[variables_json, simple_mode_group],
                                 queue=False,
                             )
                             
                             render_btn.click(
-                                render_prompt_template,
-                                inputs=[prompt_dropdown, variables_json, api_base_box],
+                                render_template_with_modes,
+                                inputs=[
+                                    prompt_dropdown,
+                                    advanced_mode_ckb,
+                                    variables_json,
+                                    context_box,
+                                    # name/value pairs for up to 6 variables
+                                    var_name_hidden_1, var_value_tb_1,
+                                    var_name_hidden_2, var_value_tb_2,
+                                    var_name_hidden_3, var_value_tb_3,
+                                    var_name_hidden_4, var_value_tb_4,
+                                    var_name_hidden_5, var_value_tb_5,
+                                    var_name_hidden_6, var_value_tb_6,
+                                    api_base_box,
+                                ],
                                 outputs=[rendered_output, rendered_json_hidden, render_status],
                                 queue=False,
                             )
                             
                             paste_btn.click(
                                 paste_template_to_input,
-                                inputs=[rendered_json_hidden],
-                                outputs=[system_prompt_box, user_input],
+                                inputs=[rendered_json_hidden, prompt_dropdown, api_base_box],
+                                outputs=[system_prompt_box, user_input, response_mode_dd, schema_code],
+                                queue=False,
+                            )
+                            
+                            paste_examples_btn.click(
+                                paste_examples_to_context,
+                                inputs=[examples_text_hidden, context_box],
+                                outputs=[context_box],
                                 queue=False,
                             )
 
@@ -1022,7 +1152,7 @@ def build_demo() -> gr.Blocks:
         clear_button.click(
             clear_chat_and_metrics,
             inputs=None,
-            outputs=[chatbot, metrics_display],
+            outputs=[chatbot, metrics_display, user_input, system_prompt_box, context_box, response_mode_dd],
             queue=False,
         )
 
