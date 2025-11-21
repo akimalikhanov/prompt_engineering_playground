@@ -41,6 +41,7 @@ models:
       notes: "OpenAI list price for full GPT-4o: $2.50 per 1M input, $10.00 per 1M output tokens"
     capabilities:
       streaming: true
+      tool_calling: true
     params_override: {}       # keep empty to use defaults
 
   - id: gpt-mini              # matches your --model_id choices
@@ -59,6 +60,7 @@ models:
       notes: "OpenAI list price: $0.15 per 1M input tokens, $0.60 per 1M output tokens"
     capabilities:
       streaming: true
+      tool_calling: true
     params_override: {}       # keep empty to use defaults
 
   - id: gpt-o4-mini               # matches your --model_id choices
@@ -77,6 +79,7 @@ models:
       notes: "OpenAI list price: $1.10 per 1M input tokens, $4.40 per 1M output tokens. Compact reasoning model with 200k context window."
     capabilities:
       streaming: true
+      tool_calling: true
     params_override: {temperature: 1.0}   # o4-mini only supports temperature=1
 
   - id: gemini-flash-lite
@@ -91,6 +94,7 @@ models:
       notes: "Free tier is used (daily rate limits are applied by Google)"
     capabilities:
       streaming: true
+      tool_calling: true
     params_override: {}
 
   - id: gemini-flash
@@ -105,6 +109,7 @@ models:
       notes: "Free tier is used (daily rate limits are applied by Google)"
     capabilities:
       streaming: true
+      tool_calling: true
     params_override: {max_tokens: 2000}
 
   # - id: gemini-pro
@@ -137,6 +142,7 @@ models:
       notes: "Running on self-hosted GPU with vLLM. No API billing."
     capabilities:
       streaming: true
+      tool_calling: true
     params_override: {}
 
   - id: qwen
@@ -154,4 +160,5 @@ models:
       notes: "Running on self-hosted GPU with vLLM. No API billing."
     capabilities:
       streaming: true
+      tool_calling: true
     params_override: {}

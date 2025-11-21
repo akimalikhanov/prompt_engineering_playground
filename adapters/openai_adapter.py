@@ -310,6 +310,7 @@ def _unified_openai_api_call(
     prompt_tokens_total = 0
     completion_tokens_total = 0
     total_tokens_total = 0
+    executed_tools = []  # Track which tools were executed
 
     while True:
         res = _single_completion_call(messages_for_tools)
@@ -351,6 +352,9 @@ def _unified_openai_api_call(
 
                 # Execute the corresponding Python tool
                 if name:
+                    # Track that this tool was executed
+                    if name not in executed_tools:
+                        executed_tools.append(name)
                     try:
                         args = {}
                         if isinstance(arguments_str, str) and arguments_str.strip():
@@ -404,5 +408,6 @@ def _unified_openai_api_call(
                 "completion_tokens": completion_tokens_total or None,
                 "total_tokens": total_tokens_total or None,
                 "cost_usd": cost_usd,
+                "executed_tools": executed_tools if executed_tools else None,
             },
         }

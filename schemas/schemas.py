@@ -119,6 +119,7 @@ class Metrics(BaseModel):
     total_tokens: Optional[int] = None
     cost_usd: Optional[float] = None
     session_id: Optional[str] = None
+    executed_tools: Optional[List[str]] = None
 
 class ChatResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")

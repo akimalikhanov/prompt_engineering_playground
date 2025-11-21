@@ -2,7 +2,7 @@ tools:
   - type: function
     function:
       name: get_custom_movie_details
-      description: "Look up detailed information about a movie by title using the OMDB API."
+      description: "Look up detailed information (title, plot, year, rating, actors, IMDB link) about a movie by title using the OMDB API."
       parameters:
         type: object
         properties:
@@ -18,3 +18,48 @@ tools:
     python:
       module: services.llm_tools
       callable: get_custom_movie_details
+  - type: function
+    function:
+      name: search_arxiv
+      description: "Search arXiv for academic papers. Returns a list of articles with details including title, authors, summary, categories, links (HTML and PDF), published date, and more."
+      parameters:
+        type: object
+        properties:
+          query:
+            type: string
+            description: "Search query string for arXiv papers (e.g., 'machine learning', 'all:rag', 'cat:cs.CL')"
+          max_results:
+            type: integer
+            description: "Maximum number of results to return. Default is 10."
+            default: 10
+          start:
+            type: integer
+            description: "Starting index for pagination. Default is 0."
+            default: 0
+        required: ["query"]
+    python:
+      module: services.llm_tools
+      callable: search_arxiv
+  - type: function
+    function:
+      name: get_fmp_company_data
+      description: "Fetch comprehensive company financial data from FinancialModelingPrep API. Returns company profile information and optionally income statement and balance sheet data. Automatically calculates derived financial metrics (margins, ratios) when financial statements are requested."
+      parameters:
+        type: object
+        properties:
+          symbol:
+            type: string
+            description: "Stock ticker symbol (e.g., 'AAPL', 'MSFT', 'GOOGL'). Required."
+          statements:
+            type: array
+            items:
+              type: string
+              enum: ["income", "balance"]
+            description: "Optional list of financial statements to include. Use 'income' to include income statement data, 'balance' to include balance sheet data. If both are provided, derived metrics will be calculated. If omitted, only company profile is returned."
+          api_key:
+            type: string
+            description: "Optional API key for FinancialModelingPrep. If not provided, will use FMP_API_KEY environment variable."
+        required: ["symbol"]
+    python:
+      module: services.llm_tools
+      callable: get_fmp_company_data

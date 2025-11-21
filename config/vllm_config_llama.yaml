@@ -11,3 +11,5 @@ gpu_memory_utilization: 0.75
 quantization: awq_marlin
 dtype: half
 uvicorn_log_level: "info"
+enable_auto_tool_choice: true
+tool_call_parser: llama3_json

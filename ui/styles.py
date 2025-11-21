@@ -45,3 +45,42 @@ TEXTAREA_SCROLL_CSS = """
 }
 """
 
+ENHANCED_UI_CSS = """
+/* Enhanced UI checkbox styling - attention-grabbing */
+.enhanced-ui-checkbox {
+    font-size: 16px !important;
+    font-weight: 600 !important;
+}
+
+.enhanced-ui-checkbox label {
+    font-size: 16px !important;
+    font-weight: 600 !important;
+}
+"""
+
+NOTE_CSS = """
+/* Note styling - smaller and slightly transparent */
+.note-style {
+    font-size: 0.9rem !important;
+    opacity: 0.9;
+    color: rgba(0, 0, 0, 0.8);
+}
+
+@media (prefers-color-scheme: dark) {
+    .note-style {
+        color: rgba(255, 255, 255, 0.8);
+    }
+}
+
+.note-style p {
+    margin: 0.25rem 0;
+    font-size: 0.9rem !important;
+    opacity: 0.9;
+}
+
+.note-style strong {
+    opacity: 0.9;
+    font-weight: 500;
+}
+"""
+
