@@ -136,6 +136,7 @@ def chat(body: ChatRequest):
         final_res = {
             "text": result["text"],
             "metrics": metrics,
+            "tool_messages": result.get("tool_messages"),  # Include tool messages from backend
         }
 
         log_run(

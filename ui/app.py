@@ -197,22 +197,22 @@ def stream_chat(
         return
 
     # Handle tools: if enabled, force non-streaming endpoint
-    if enable_tools:
-        endpoint_key = "chat"  # Force non-streaming endpoint
-        endpoint_cfg = ENDPOINTS.get(endpoint_key)
-        if not endpoint_cfg:
-            error_msg = "⚠️ Non-streaming endpoint not found. Tools require non-streaming mode."
-            error_history = history + [{"role": "user", "content": user_message}, {"role": "assistant", "content": error_msg}]
-            yield error_history, format_metrics_badges({}, None, None), session_state_out
-            return
-    else:
-        endpoint_key = _normalize_selection(endpoint_choice)
-        endpoint_cfg = ENDPOINTS.get(endpoint_key) if endpoint_key else None
-        if not endpoint_cfg:
-            error_msg = "⚠️ Unknown endpoint selection."
-            error_history = history + [{"role": "user", "content": user_message}, {"role": "assistant", "content": error_msg}]
-            yield error_history, format_metrics_badges({}, None, None), session_state_out
-            return
+    # if enable_tools:
+    #    endpoint_key = "chat"  # Force non-streaming endpoint
+    #    endpoint_cfg = ENDPOINTS.get(endpoint_key)
+    #    if not endpoint_cfg:
+    #        error_msg = "⚠️ Non-streaming endpoint not found. Tools require non-streaming mode."
+    #        error_history = history + [{"role": "user", "content": user_message}, {"role": "assistant", "content": error_msg}]
+    #        yield error_history, format_metrics_badges({}, None, None), session_state_out
+    #        return
+    # else:
+    endpoint_key = _normalize_selection(endpoint_choice)
+    endpoint_cfg = ENDPOINTS.get(endpoint_key) if endpoint_key else None
+    if not endpoint_cfg:
+        error_msg = "⚠️ Unknown endpoint selection."
+        error_history = history + [{"role": "user", "content": user_message}, {"role": "assistant", "content": error_msg}]
+        yield error_history, format_metrics_badges({}, None, None), session_state_out
+        return
 
     provider_id = model_config["provider"]
     payload_messages = _build_messages(user_message, sanitized_history, system_prompt, context_prompt)
@@ -315,6 +315,16 @@ def stream_chat(
                                             except json.JSONDecodeError:
                                                 pass
                                     continue
+                                if "event: tool_status" in event_str:
+                                    # Extract tool status message
+                                    for line in event_str.split("\n"):
+                                        if line.startswith("data: "):
+                                            tool_msg = line[6:].strip()
+                                            if tool_msg:
+                                                # Add tool execution message to history
+                                                running_history.append({"role": "assistant", "content": tool_msg})
+                                                yield running_history, format_metrics_badges(metrics, ttft_ms, None), session_state_out
+                                    continue
                                 if "event: message" in event_str:
                                     data_lines = []
                                     for line in event_str.split("\n"):
@@ -328,8 +338,11 @@ def stream_chat(
                                     accumulated_response += new_text
                                     # Update assistant response in messages format
                                     # If last message is user (first chunk), append new assistant message
+                                    # If last message is a tool_status message, append new assistant message to preserve tool message
                                     # Otherwise (subsequent chunks), update existing assistant message
-                                    if running_history[-1].get("role") == "user":
+                                    last_msg = running_history[-1] if running_history else {}
+                                    is_tool_status = last_msg.get("content", "").startswith("🔧")
+                                    if running_history[-1].get("role") == "user" or is_tool_status:
                                         running_history.append({"role": "assistant", "content": accumulated_response})
                                     else:
                                         running_history[-1] = {"role": "assistant", "content": accumulated_response}
@@ -350,6 +363,14 @@ def stream_chat(
                                             session_state_out = _update_session_from_metrics(metrics, session_state_out)
                                         except json.JSONDecodeError:
                                             pass
+                            # Process tool_status events
+                            elif "event: tool_status" in event_str:
+                                for line in event_str.split("\n"):
+                                    if line.startswith("data: "):
+                                        tool_msg = line[6:].strip()
+                                        if tool_msg:
+                                            running_history.append({"role": "assistant", "content": tool_msg})
+                                            yield running_history, format_metrics_badges(metrics, ttft_ms, None), session_state_out
                             # Also process message events in the final buffer
                             elif "event: message" in event_str:
                                 data_lines = []
@@ -360,11 +381,21 @@ def stream_chat(
                                 if new_text:
                                     if ttft_ms is None:
                                         ttft_ms = (time.perf_counter() - start_time) * 1000.0
+                                    
+                                    # Check if this is a tool execution log
+                                    # Tool logs usually start with "🔧" or contain specific markers
+                                    # But in our backend, tool logs are currently just part of the text stream or separate messages
+                                    # We need to append them to history carefully
+                                    
                                     accumulated_response += new_text
+                                    
                                     # Update assistant response in messages format
                                     # If last message is user (first chunk), append new assistant message
+                                    # If last message is a tool_status message, append new assistant message to preserve tool message
                                     # Otherwise (subsequent chunks), update existing assistant message
-                                    if running_history[-1].get("role") == "user":
+                                    last_msg = running_history[-1] if running_history else {}
+                                    is_tool_status = last_msg.get("content", "").startswith("🔧")
+                                    if running_history[-1].get("role") == "user" or is_tool_status:
                                         running_history.append({"role": "assistant", "content": accumulated_response})
                                     else:
                                         running_history[-1] = {"role": "assistant", "content": accumulated_response}
@@ -374,12 +405,26 @@ def stream_chat(
                         for chunk in response.iter_text():
                             if not chunk:
                                 continue
+                            # Check for metrics JSON
                             if chunk.startswith("\n{") and "metrics" in chunk:
                                 try:
                                     metrics_obj = json.loads(chunk.strip())
                                     metrics = metrics_obj.get("metrics", metrics_obj)
                                     # Update session_state if session_id is in metrics
                                     session_state_out = _update_session_from_metrics(metrics, session_state_out)
+                                except json.JSONDecodeError:
+                                    pass
+                                continue
+                            
+                            # Check for tool_status JSON
+                            if chunk.startswith("\n{") and "tool_status" in chunk:
+                                try:
+                                    tool_obj = json.loads(chunk.strip())
+                                    tool_msg = tool_obj.get("tool_status", "")
+                                    if tool_msg:
+                                        # Add tool execution message to history
+                                        running_history.append({"role": "assistant", "content": tool_msg})
+                                        yield running_history, format_metrics_badges(metrics, ttft_ms, None), session_state_out
                                 except json.JSONDecodeError:
                                     pass
                                 continue
@@ -390,8 +435,11 @@ def stream_chat(
                             accumulated_response += chunk
                             # Update assistant response in messages format
                             # If last message is user (first chunk), append new assistant message
+                            # If last message is a tool_status message, append new assistant message to preserve tool message
                             # Otherwise (subsequent chunks), update existing assistant message
-                            if running_history[-1].get("role") == "user":
+                            last_msg = running_history[-1] if running_history else {}
+                            is_tool_status = last_msg.get("content", "").startswith("🔧")
+                            if running_history[-1].get("role") == "user" or is_tool_status:
                                 running_history.append({"role": "assistant", "content": accumulated_response})
                             else:
                                 running_history[-1] = {"role": "assistant", "content": accumulated_response}
@@ -403,17 +451,17 @@ def stream_chat(
                 response.raise_for_status()
                 data = response.json()
                 
-                # Extract text and metrics from response
+                # Extract text, metrics, and tool messages from response
                 text = data.get("text")
                 metrics = data.get("metrics", {})
-                executed_tools = metrics.get("executed_tools") or []
+                tool_messages = data.get("tool_messages", [])  # Backend-formatted tool messages
                 
-                # Add tool execution messages before the assistant response
-                if executed_tools:
-                    for tool_name in executed_tools:
+                # Add tool execution messages before the assistant response (from backend)
+                if tool_messages:
+                    for tool_msg in tool_messages:
                         running_history.append({
                             "role": "assistant",
-                            "content": f"🔧 `{tool_name}` is executed..."
+                            "content": tool_msg
                         })
                 
                 # Handle text response - always use text if it exists, even if empty
@@ -459,11 +507,17 @@ def stream_chat(
     final_latency = (time.perf_counter() - start_time) * 1000.0
     # Ensure assistant response is in messages format
     # If last message is user (first chunk), append new assistant message
+    # If last message is a tool_status message, append new assistant message to preserve tool message
     # Otherwise (subsequent chunks), update existing assistant message
-    if running_history[-1].get("role") == "user":
-        running_history.append({"role": "assistant", "content": accumulated_response})
+    if running_history:
+        last_msg = running_history[-1]
+        is_tool_status = last_msg.get("content", "").startswith("🔧")
+        if running_history[-1].get("role") == "user" or is_tool_status:
+            running_history.append({"role": "assistant", "content": accumulated_response})
+        else:
+            running_history[-1] = {"role": "assistant", "content": accumulated_response}
     else:
-        running_history[-1] = {"role": "assistant", "content": accumulated_response}
+        running_history.append({"role": "assistant", "content": accumulated_response})
     yield running_history, format_metrics_badges(metrics, ttft_ms, final_latency), session_state_out
 
 
@@ -636,6 +690,11 @@ def build_demo() -> gr.Blocks:
                     height=520,
                     type="messages",
                     show_copy_button=True,
+                    # avatar_images: [user, assistant]; None = no avatar
+                    avatar_images=[
+                        None,  # no user icon
+                        "utils/icons/icons8-ai-240.png",  # assistant icon only
+                    ],
                 )
                 user_input = gr.Textbox(
                     label="Your message",
@@ -1222,7 +1281,7 @@ def build_demo() -> gr.Blocks:
                             gr.Markdown(
                                 "**Tool Calling** enables the model to use external tools/functions to fetch real-time data and perform actions.\n\n"
                                 "- When enabled, the model can automatically call available tools when needed.\n"
-                                "- Tools are only supported in non-streaming mode, so the endpoint will automatically switch to non-streaming.\n"
+                                "- Tools are supported in both streaming and non-streaming modes.\n"
                                 "- The system prompt will be enhanced to instruct the model to use tools when necessary.\n"
                             )
                             
@@ -1241,7 +1300,6 @@ def build_demo() -> gr.Blocks:
                             
                             gr.Markdown(
                                 """**Notes**: 
-                                - When tools are enabled, the endpoint will be forced to non-streaming mode and the endpoint selection will be disabled.
                                 - get_fmp_company_data tool supports income and balance sheet data for a limited number of companies. For more details, see [FMP API documentation](https://site.financialmodelingprep.com/developer/docs).""",
                                 elem_classes=["note-style"]
                             )
@@ -1311,8 +1369,8 @@ def build_demo() -> gr.Blocks:
             )
             
             if enable_tools:
-                # Force to non-streaming endpoint and set system prompt
-                endpoint_update = gr.update(value="chat", interactive=False)
+                # Allow streaming endpoint selection even with tools
+                endpoint_update = gr.update(interactive=True)
                 # Only set system prompt if it's currently empty
                 if not current_system_prompt or not current_system_prompt.strip():
                     system_prompt_update = gr.update(value=tools_system_prompt)

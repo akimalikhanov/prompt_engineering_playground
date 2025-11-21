@@ -1,11 +1,77 @@
 import os, time, json
-from typing import Generator, Optional, Literal
+from typing import Generator, Optional, Literal, Union
+from dataclasses import dataclass
 
 import openai
 
 from services.llm_tools import get_tool_callable
 from utils.sse import sse_pack
 from utils.load_configs import _load_models_config
+
+
+@dataclass
+class ToolStatusMarker:
+    """Marker to indicate tool execution status in streaming."""
+    tool_names: list
+
+
+MAX_TOOL_ITERATIONS = 5
+
+
+def _is_o4_model(model: str) -> bool:
+    return model.startswith("o4") or "o4-mini" in model
+
+
+def _is_o_series_model(model: str) -> bool:
+    return model.startswith("o") and (
+        "-mini" in model or model.startswith(("o1", "o3", "o4"))
+    )
+
+
+def _supports_seed(model: str) -> bool:
+    return (not _is_o_series_model(model)) and ("gemini" not in model)
+
+
+def _normalize_response_format(response_format):
+    if response_format is None:
+        return None
+
+    if hasattr(response_format, "model_dump"):
+        response_format_dict = response_format.model_dump(exclude_none=True)
+    elif isinstance(response_format, dict):
+        response_format_dict = response_format.copy()
+    else:
+        response_format_dict = dict(response_format)
+
+    json_schema_config = response_format_dict.get("json_schema")
+    if isinstance(json_schema_config, dict):
+        response_format_dict["json_schema"] = {
+            k: v for k, v in json_schema_config.items() if v is not None
+        }
+
+    if response_format_dict.get("type") == "json_schema":
+        json_schema = response_format_dict.setdefault("json_schema", {})
+        if isinstance(json_schema, dict) and "strict" not in json_schema:
+            json_schema["strict"] = True
+
+    return response_format_dict
+
+
+def _iter_unique_tool_names(tool_names):
+    seen = set()
+    for tool_name in tool_names:
+        cleaned = (tool_name or "").strip()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            yield cleaned
+
+
+def _is_tool_loop(recent_tool_calls, current_tool_signatures):
+    return (
+        len(recent_tool_calls) >= 2
+        and recent_tool_calls[-1] == current_tool_signatures
+        and recent_tool_calls[-2] == current_tool_signatures
+    )
 
 
 def _unified_openai_api_call(
@@ -75,14 +141,7 @@ def _unified_openai_api_call(
         [{"role": "user", "content": messages}] if isinstance(messages, str) else messages
     )
     
-    # O4-series models (o4-mini) only support temperature=1
-    # Check if model is o4-mini or any o4 variant
-    is_o4_model = model.startswith("o4") or "o4-mini" in model
-    if is_o4_model:
-        # Force temperature to 1.0 for o4 models
-        temperature = 1.0
-    else:
-        temperature = params.get("temperature")
+    temperature = 1.0 if _is_o4_model(model) else params.get("temperature")
     
     kwargs = {
         "model": model,
@@ -92,47 +151,17 @@ def _unified_openai_api_call(
         "stream": stream,
     }
     
-    # O-series models (o1, o3, o4) use max_completion_tokens instead of max_tokens
-    if model.startswith("o") and ("-mini" in model or model.startswith("o1") or model.startswith("o3") or model.startswith("o4")):
+    if _is_o_series_model(model):
         kwargs["max_completion_tokens"] = params.get("max_tokens")
     else:
         kwargs["max_tokens"] = params.get("max_tokens")
     
-    # O-series models don't support seed parameter
-    if not (model.startswith("o") and ("-mini" in model or model.startswith("o1") or model.startswith("o3") or model.startswith("o4"))):
+    if _supports_seed(model):
         kwargs["seed"] = params.get("seed")
     
-    # Some OpenAI-compatible providers balk at 'seed' (e.g., Gemini via proxy)
-    if "gemini" in model:
-        kwargs.pop("seed", None)
-    
-    # Handle response_format if provided
-    response_format = params.get("response_format")
+    response_format = _normalize_response_format(params.get("response_format"))
     if response_format is not None:
-        # Convert to dict if it's a Pydantic model
-        if hasattr(response_format, "model_dump"):
-            # Use exclude_none=True to omit None values (like optional name field)
-            response_format_dict = response_format.model_dump(exclude_none=True)
-        elif isinstance(response_format, dict):
-            response_format_dict = response_format.copy()
-            # Remove None values from dict
-            if isinstance(response_format_dict.get("json_schema"), dict):
-                json_schema_config = response_format_dict["json_schema"]
-                response_format_dict["json_schema"] = {
-                    k: v for k, v in json_schema_config.items() if v is not None
-                }
-        else:
-            response_format_dict = dict(response_format)
-        
-        # Ensure strict defaults to True for json_schema type if not provided
-        if response_format_dict.get("type") == "json_schema":
-            json_schema_config = response_format_dict.get("json_schema", {})
-            if isinstance(json_schema_config, dict):
-                # If strict is not provided, default to True
-                if "strict" not in json_schema_config:
-                    json_schema_config["strict"] = True
-        
-        kwargs["response_format"] = response_format_dict
+        kwargs["response_format"] = response_format
 
     # Handle tools / tool_choice if provided.
     tools = params.get("tools")
@@ -148,11 +177,11 @@ def _unified_openai_api_call(
 
     # If streaming, request usage at end-of-stream
     if stream:
-        if tools:
-            # For now, we only support tools for non-streaming calls.
-            raise ValueError(
-                "Tools/functions are only supported for non-streaming calls in this version."
-            )
+        # if tools:
+        #     # For now, we only support tools for non-streaming calls.
+        #     raise ValueError(
+        #         "Tools/functions are only supported for non-streaming calls in this version."
+        #     )
         kwargs["stream_options"] = {"include_usage": True}
     
     t0 = time.perf_counter()
@@ -160,12 +189,185 @@ def _unified_openai_api_call(
     # For streaming, we perform a single call and then stream chunks as before.
     # For non-streaming, we may perform multiple calls if tool calls are used.
     if stream:
-        res = client.chat.completions.create(**kwargs)
+        def _stream_with_tools(current_messages, iteration_count=0, recent_tool_calls=None):
+            # Track recent tool calls to detect loops
+            if recent_tool_calls is None:
+                recent_tool_calls = []
+            
+            # Prevent infinite loops by limiting iterations
+            if iteration_count >= MAX_TOOL_ITERATIONS:
+                # Emit error message and stop
+                error_msg = f"⚠️ Maximum tool call iterations ({MAX_TOOL_ITERATIONS}) reached. Stopping to prevent infinite loop."
+                if stream_mode == "raw":
+                    yield "\n" + json.dumps({"error": error_msg}) + "\n"
+                else:
+                    yield sse_pack(error_msg, event="error")
+                return
+            
+            # Update messages in kwargs
+            local_kwargs = kwargs.copy()
+            local_kwargs["messages"] = current_messages
+            
+            # We need to track if we are in a tool call loop
+            # If tools are not enabled, this is just a single pass
+            
+            response_stream = client.chat.completions.create(**local_kwargs)
+            
+            # Buffer for accumulating tool calls
+            # Map index -> {id, name, arguments}
+            tool_calls_buffer = {}
+            finish_reason = None
+            
+            # Helper to append chunks to buffer
+            for chunk in response_stream:
+                # 1. Yield the chunk immediately so text/usage propagates
+                yield chunk
+                
+                if not chunk.choices:
+                    continue
+                    
+                delta = chunk.choices[0].delta
+                
+                # Accumulate tool calls if present
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        idx = tc.index
+                        if idx not in tool_calls_buffer:
+                            tool_calls_buffer[idx] = {"id": "", "name": "", "arguments": ""}
+                        
+                        if tc.id:
+                            tool_calls_buffer[idx]["id"] += tc.id
+                        if tc.function:
+                            if tc.function.name:
+                                tool_calls_buffer[idx]["name"] += tc.function.name
+                            if tc.function.arguments:
+                                tool_calls_buffer[idx]["arguments"] += tc.function.arguments
+                
+                if chunk.choices[0].finish_reason:
+                    finish_reason = chunk.choices[0].finish_reason
+            
+            # End of stream for this turn. Check if we need to execute tools.
+            if finish_reason == "tool_calls" and tool_calls_buffer:
+                # 1. Reconstruct the assistant message with tool calls
+                tool_calls_payload = []
+                current_tool_signatures = []  # Track tool name + arguments for loop detection
+                for idx in sorted(tool_calls_buffer.keys()):
+                    tc_data = tool_calls_buffer[idx]
+                    tool_name = tc_data["name"].strip() if tc_data["name"] else ""
+                    tool_args = tc_data["arguments"].strip() if tc_data["arguments"] else ""
+                    
+                    # Skip if tool name is empty or malformed
+                    if not tool_name:
+                        continue
+                    
+                    # Detect and fix duplicated tool names (e.g., "get_fmp_company_dataget_fmp_company_data")
+                    # This can happen if the name is sent in chunks and gets duplicated
+                    name_length = len(tool_name)
+                    if name_length > 0:
+                        # Check if the name appears to be duplicated (first half == second half)
+                        half = name_length // 2
+                        if name_length % 2 == 0 and tool_name[:half] == tool_name[half:]:
+                            tool_name = tool_name[:half]  # Use only the first half
+                    
+                    tool_signature = (tool_name, tool_args)
+                    current_tool_signatures.append(tool_signature)
+                    
+                    tool_calls_payload.append({
+                        "id": tc_data["id"].strip() if tc_data["id"] else "",
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": tool_args
+                        }
+                    })
+                
+                # Check for repeated identical tool calls (loop detection)
+                if _is_tool_loop(recent_tool_calls, current_tool_signatures):
+                    error_msg = "⚠️ Detected infinite loop: same tool calls repeated. Stopping to prevent infinite loop."
+                    if stream_mode == "raw":
+                        yield "\n" + json.dumps({"error": error_msg}) + "\n"
+                    else:
+                        yield sse_pack(error_msg, event="error")
+                    return
+                
+                # Track this tool call set (keep last 5 for loop detection)
+                recent_tool_calls.append(current_tool_signatures)
+                if len(recent_tool_calls) > 5:
+                    recent_tool_calls.pop(0)
+                
+                # Append assistant message
+                current_messages.append({
+                    "role": "assistant",
+                    "content": None, 
+                    "tool_calls": tool_calls_payload
+                })
+                
+                # 2. Execute tools
+                executed_tool_names = []
+                seen_tool_calls = set()  # Track unique tool calls to avoid duplicates
+                for tc in tool_calls_payload:
+                    func_name = tc["function"]["name"]
+                    func_args_str = tc["function"]["arguments"]
+                    call_id = tc["id"]
+                    
+                    # Validate and clean tool name (strip whitespace, handle empty/malformed names)
+                    if not func_name or not isinstance(func_name, str):
+                        continue
+                    func_name = func_name.strip()
+                    if not func_name:
+                        continue
+                    
+                    # Create a unique key for this tool call (name + args to handle same tool with different args)
+                    tool_call_key = (func_name, func_args_str, call_id)
+                    if tool_call_key not in seen_tool_calls:
+                        seen_tool_calls.add(tool_call_key)
+                        executed_tool_names.append(func_name)
+                    
+                    result_content = ""
+                    try:
+                        args = {}
+                        if func_args_str and func_args_str.strip():
+                            try:
+                                args = json.loads(func_args_str)
+                            except json.JSONDecodeError:
+                                args = {}
+                        
+                        tool_callable = get_tool_callable(func_name)
+                        # Execute
+                        if isinstance(args, dict):
+                            raw_result = tool_callable(**args)
+                        else:
+                            raw_result = tool_callable(args)
+                        result_content = json.dumps(raw_result)
+                    except Exception as exc:
+                        result_content = json.dumps({"error": f"Tool execution failed: {exc}"})
+                    
+                    # Append tool result message
+                    current_messages.append({
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "name": func_name,
+                        "content": result_content
+                    })
+                
+                # 2.5. Emit tool status marker before recursing
+                yield ToolStatusMarker(tool_names=executed_tool_names)
+                
+                # 3. Recurse: Start a new stream with updated messages (increment iteration count, pass recent_tool_calls)
+                yield from _stream_with_tools(current_messages, iteration_count=iteration_count + 1, recent_tool_calls=recent_tool_calls)
+
+        res = _stream_with_tools(normalized_messages)
+        # res = client.chat.completions.create(**kwargs)
 
     # --- helpers ------------------------------------------------------------
     def _iter_text(chunks):
-        """Yield textual deltas only; ignore non-text chunks."""
+        """Yield textual deltas only; ignore non-text chunks. Also passes through ToolStatusMarker."""
         for ch in chunks:
+            # Check if this is a ToolStatusMarker
+            if isinstance(ch, ToolStatusMarker):
+                yield ch, None  # Pass marker with None as the chunk
+                continue
+                
             piece = None
             # Try delta.content first (standard streaming format)
             try:
@@ -201,51 +403,70 @@ def _unified_openai_api_call(
                 return round(cost, 6)
         return None  # model not found
 
+    def _update_usage_totals(usage_obj, totals):
+        if not usage_obj:
+            return
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = getattr(usage_obj, key, 0) or 0
+            if value:
+                totals[key] = (totals[key] or 0) + value
+
+    def _build_metrics_payload(ttft, latency, chunk_count, usage_totals):
+        prompt_tokens = usage_totals["prompt_tokens"]
+        completion_tokens = usage_totals["completion_tokens"]
+        total_tokens = usage_totals["total_tokens"]
+        cost_usd = _lookup_pricing(model, prompt_tokens, completion_tokens)
+        return {
+            "ttft_ms": round(ttft * 1000, 1) if ttft is not None else None,
+            "latency_ms": round(latency * 1000, 1),
+            "chunks": chunk_count,
+            "model": model,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "tokens_per_chunk": (
+                round((completion_tokens or 0) / (chunk_count or 1), 3)
+                if completion_tokens is not None
+                else None
+            ),
+            "cost_usd": cost_usd,
+        }
+
     # --- streaming path -----------------------------------------------------
     if stream:
         if stream_mode == "raw":
             def _iter_raw() -> Generator[str, None, None]:
                 ttft = None
                 chunk_count = 0
-                prompt_tokens = None
-                completion_tokens = None
-                total_tokens= None
+                usage_totals = {
+                    "prompt_tokens": None,
+                    "completion_tokens": None,
+                    "total_tokens": None,
+                }
 
                 for piece, ch in _iter_text(res):
+                    # Handle ToolStatusMarker
+                    if isinstance(piece, ToolStatusMarker):
+                        for tool_name in _iter_unique_tool_names(piece.tool_names):
+                            tool_msg = {"tool_status": f"🔧 `{tool_name}` is executed..."}
+                            yield "\n" + json.dumps(tool_msg) + "\n"
+                        continue
+                    
                     # mark TTFT on first chunk that arrives (text or usage)
                     if ttft is None:
                         ttft = time.perf_counter() - t0
                     # collect usage if/when the final usage chunk arrives
-                    if getattr(ch, "usage", None):
-                        try:
-                            prompt_tokens = ch.usage.prompt_tokens
-                            completion_tokens = ch.usage.completion_tokens
-                            total_tokens = ch.usage.total_tokens
-                        except Exception:
-                            pass
+                    try:
+                        _update_usage_totals(getattr(ch, "usage", None), usage_totals)
+                    except Exception:
+                        pass
                     if piece:
                         chunk_count += 1
                         yield piece
 
                 total = time.perf_counter() - t0
                 if include_metrics:
-                    cost_usd = _lookup_pricing(model, prompt_tokens, completion_tokens)
-                    metrics = {
-                        "metrics": {
-                            "ttft_ms": round(ttft * 1000, 1) if ttft is not None else None,
-                            "latency_ms": round(total * 1000, 1),
-                            "chunks": chunk_count,
-                            "model": model,
-                            "prompt_tokens": prompt_tokens,
-                            "completion_tokens": completion_tokens,
-                            "total_tokens": total_tokens, 
-                            "tokens_per_chunk": (
-                                round((completion_tokens or 0) / (chunk_count or 1), 3)
-                                if (completion_tokens is not None) else None
-                            ),
-                            "cost_usd": cost_usd,
-                        }
-                    }
+                    metrics = {"metrics": _build_metrics_payload(ttft, total, chunk_count, usage_totals)}
                     # emit a newline + JSON so curl clients can read it cleanly
                     yield "\n" + json.dumps(metrics) + "\n"
             return _iter_raw()
@@ -254,21 +475,27 @@ def _unified_openai_api_call(
         def _iter_sse() -> Generator[bytes, None, None]:
             ttft = None
             chunk_count = 0
-            prompt_tokens = None
-            completion_tokens = None
-            total_tokens= None
+            usage_totals = {
+                "prompt_tokens": None,
+                "completion_tokens": None,
+                "total_tokens": None,
+            }
 
             for piece, ch in _iter_text(res):
+                # Handle ToolStatusMarker
+                if isinstance(piece, ToolStatusMarker):
+                    for tool_name in _iter_unique_tool_names(piece.tool_names):
+                        tool_msg = f"🔧 `{tool_name}` is executed..."
+                        yield sse_pack(tool_msg, event="tool_status")
+                    continue
+                
                 if ttft is None:
                     ttft = time.perf_counter() - t0
                 # capture usage if present (arrives as the last/penultimate chunk)
-                if getattr(ch, "usage", None):
-                    try:
-                        prompt_tokens = ch.usage.prompt_tokens
-                        completion_tokens = ch.usage.completion_tokens
-                        total_tokens = ch.usage.total_tokens
-                    except Exception:
-                        pass
+                try:
+                    _update_usage_totals(getattr(ch, "usage", None), usage_totals)
+                except Exception:
+                    pass
                 if piece:
                     chunk_count += 1
                     yield sse_pack(piece, event=sse_event)
@@ -277,21 +504,7 @@ def _unified_openai_api_call(
             if send_done:
                 yield sse_pack("done", event="status")
             if include_metrics:
-                cost_usd = _lookup_pricing(model, prompt_tokens, completion_tokens)
-                payload = {
-                    "ttft_ms": round(ttft * 1000, 1) if ttft is not None else None,
-                    "latency_ms": round(total * 1000, 1),
-                    "chunks": chunk_count,
-                    "model": model,
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": total_tokens, 
-                    "tokens_per_chunk": (
-                        round((completion_tokens or 0) / (chunk_count or 1), 3)
-                        if (completion_tokens is not None) else None
-                    ),
-                    "cost_usd": cost_usd
-                }
+                payload = _build_metrics_payload(ttft, total, chunk_count, usage_totals)
                 yield sse_pack(json.dumps(payload), event="metrics")
         return _iter_sse()
         
@@ -311,8 +524,11 @@ def _unified_openai_api_call(
     completion_tokens_total = 0
     total_tokens_total = 0
     executed_tools = []  # Track which tools were executed
+    iteration_count = 0
+    recent_tool_calls = []  # Track recent tool calls for loop detection
 
-    while True:
+    while iteration_count < MAX_TOOL_ITERATIONS:
+        iteration_count += 1
         res = _single_completion_call(messages_for_tools)
         choice = res.choices[0]
         msg = choice.message
@@ -330,6 +546,23 @@ def _unified_openai_api_call(
 
         # If the model is requesting tool calls, execute them and loop again.
         if finish_reason == "tool_calls" and getattr(msg, "tool_calls", None):
+            # Track current tool call signatures for loop detection
+            current_tool_signatures = []
+            for tc in msg.tool_calls:
+                fn = getattr(tc, "function", None)
+                name = getattr(fn, "name", None) if fn else None
+                arguments_str = getattr(fn, "arguments", "{}") if fn else "{}"
+                current_tool_signatures.append((name, arguments_str))
+            
+            # Check for repeated identical tool calls (loop detection)
+            if _is_tool_loop(recent_tool_calls, current_tool_signatures):
+                final_content = "⚠️ Detected infinite loop: same tool calls repeated. Stopping to prevent infinite loop."
+                break
+            
+            # Track this tool call set (keep last 5 for loop detection)
+            recent_tool_calls.append(current_tool_signatures)
+            if len(recent_tool_calls) > 5:
+                recent_tool_calls.pop(0)
             # Record the assistant message that requested tool calls
             tool_calls_payload = []
             tool_result_messages = []
@@ -392,11 +625,24 @@ def _unified_openai_api_call(
 
             # Loop again with updated messages to let the model use tool results.
             continue
+        
+        # If we reach here and iteration_count >= MAX_TOOL_ITERATIONS, break to prevent infinite loop
+        if iteration_count >= MAX_TOOL_ITERATIONS:
+            final_content = msg.content or ""
+            if not final_content:
+                final_content = f"⚠️ Maximum tool call iterations ({MAX_TOOL_ITERATIONS}) reached. Stopping to prevent infinite loop."
+            break
 
         # Otherwise, we have a normal completion (no further tool_calls).
         final_content = msg.content or ""
         total = time.perf_counter() - t0
         cost_usd = _lookup_pricing(model, prompt_tokens_total, completion_tokens_total)
+
+        # Format tool execution messages (same format as streaming)
+        tool_messages = []
+        if executed_tools:
+            for tool_name in executed_tools:
+                tool_messages.append(f"🔧 `{tool_name}` is executed...")
 
         return {
             "text": final_content,
@@ -410,4 +656,5 @@ def _unified_openai_api_call(
                 "cost_usd": cost_usd,
                 "executed_tools": executed_tools if executed_tools else None,
             },
+            "tool_messages": tool_messages,  # Formatted messages for UI display
         }

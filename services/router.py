@@ -54,10 +54,10 @@ def route_call(provider_id, model_id, messages, params, stream=True, stream_mode
     merged_params.update(params)
 
     # Tools are currently supported only for non-streaming calls.
-    tools = merged_params.get("tools")
-    if tools and stream:
-        raise ValueError("Tools/functions are only supported for non-streaming calls. "
-                         "Use the /chat endpoint (non-stream) when tools are enabled.")
+    # tools = merged_params.get("tools")
+    # if tools and stream:
+    #    raise ValueError("Tools/functions are only supported for non-streaming calls. "
+    #                     "Use the /chat endpoint (non-stream) when tools are enabled.")
     
     # Apply model-specific parameter overrides if any
     if 'params_override' in model_config:

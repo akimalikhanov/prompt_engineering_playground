@@ -125,6 +125,7 @@ class ChatResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: Annotated[str, Field(min_length=0, max_length=7000)]
     metrics: Metrics
+    tool_messages: Optional[List[str]] = None  # Formatted tool execution messages from backend
 
 class RunResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
