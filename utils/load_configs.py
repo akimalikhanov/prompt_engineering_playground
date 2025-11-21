@@ -20,6 +20,19 @@ def _load_models_config():
         raise yaml.YAMLError(f"Error: Invalid YAML format in models.yaml: {e}")
 
 
+def _load_tools_config() -> Dict[str, Any]:
+    """Load tools registry configuration from YAML file."""
+    try:
+        config_path = os.path.join(_PROJECT_ROOT, "config", "tools.yaml")
+        with open(config_path, "r") as f:
+            tools_config = yaml.safe_load(f) or {}
+        return tools_config
+    except FileNotFoundError:
+        raise FileNotFoundError("Error: tools.yaml not found in config/ directory")
+    except yaml.YAMLError as e:
+        raise yaml.YAMLError(f"Error: Invalid YAML format in tools.yaml: {e}")
+
+
 def _load_gradio_templates():
     """Load and validate gradio templates configuration from YAML file."""
     try:
@@ -31,6 +44,34 @@ def _load_gradio_templates():
         raise FileNotFoundError("Error: gradio_templates.yaml not found in config/ directory")
     except yaml.YAMLError as e:
         raise yaml.YAMLError(f"Error: Invalid YAML format in gradio_templates.yaml: {e}")
+
+
+@lru_cache(maxsize=1)
+def _load_tools_registry() -> Dict[str, Any]:
+    """Load tools registry as a lookup dict keyed by tool/function name.
+
+    The underlying YAML is expected to have the shape:
+        tools:
+          - type: function
+            function:
+              name: ...
+              description: ...
+              parameters: ...
+            python:
+              module: ...
+              callable: ...
+    """
+    config = _load_tools_config()
+    tools_list = config.get("tools", []) or []
+
+    registry: Dict[str, Any] = {}
+    for tool in tools_list:
+        fn = (tool.get("function") or {}).get("name")
+        if not fn:
+            # Skip invalid entries without a function name
+            continue
+        registry[fn] = tool
+    return registry
 
 
 @lru_cache(maxsize=1)

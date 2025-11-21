@@ -1,8 +1,12 @@
 import os, time, json
 from typing import Generator, Optional, Literal
+
 import openai
+
+from services.llm_tools import get_tool_callable
 from utils.sse import sse_pack
 from utils.load_configs import _load_models_config
+
 
 def _unified_openai_api_call(
     model: str,
@@ -101,7 +105,7 @@ def _unified_openai_api_call(
     # Some OpenAI-compatible providers balk at 'seed' (e.g., Gemini via proxy)
     if "gemini" in model:
         kwargs.pop("seed", None)
-
+    
     # Handle response_format if provided
     response_format = params.get("response_format")
     if response_format is not None:
@@ -130,12 +134,33 @@ def _unified_openai_api_call(
         
         kwargs["response_format"] = response_format_dict
 
+    # Handle tools / tool_choice if provided.
+    tools = params.get("tools")
+    tool_choice = params.get("tool_choice")
+
+    if tools:
+        kwargs["tools"] = [
+            t.model_dump() if hasattr(t, "model_dump") else t for t in tools
+        ]
+    if tool_choice is not None:
+        # tool_choice is already a primitive/union type in ChatParams
+        kwargs["tool_choice"] = tool_choice
+
     # If streaming, request usage at end-of-stream
     if stream:
+        if tools:
+            # For now, we only support tools for non-streaming calls.
+            raise ValueError(
+                "Tools/functions are only supported for non-streaming calls in this version."
+            )
         kwargs["stream_options"] = {"include_usage": True}
-
+    
     t0 = time.perf_counter()
-    res = client.chat.completions.create(**kwargs)
+
+    # For streaming, we perform a single call and then stream chunks as before.
+    # For non-streaming, we may perform multiple calls if tool calls are used.
+    if stream:
+        res = client.chat.completions.create(**kwargs)
 
     # --- helpers ------------------------------------------------------------
     def _iter_text(chunks):
@@ -269,26 +294,115 @@ def _unified_openai_api_call(
                 }
                 yield sse_pack(json.dumps(payload), event="metrics")
         return _iter_sse()
+        
+    # --- non-streaming path (with optional tools) ---------------------------
 
-    # --- non-streaming path -------------------------------------------------
-    msg = res.choices[0].message
-    total = time.perf_counter() - t0
+    def _single_completion_call(current_messages):
+        """Helper to perform one non-streaming completion call with given messages."""
+        local_kwargs = kwargs.copy()
+        local_kwargs["stream"] = False
+        local_kwargs["messages"] = current_messages
+        # Ensure no leftover stream_options in non-stream calls
+        local_kwargs.pop("stream_options", None)
+        return client.chat.completions.create(**local_kwargs)
 
-    usage = getattr(res, "usage", None)
-    prompt_tokens = getattr(usage, "prompt_tokens", None) if usage else None
-    completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
-    total_tokens = getattr(usage, "total_tokens", None) if usage else None
-    cost_usd = _lookup_pricing(model, prompt_tokens, completion_tokens)
-    
-    return {
-        "text": (msg.content or ""),
-        "metrics": {
-            "ttft_ms": None,  # not meaningful for non-streaming
-            "latency_ms": round(total * 1000, 1),
-            "model": model,
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "total_tokens": total_tokens,
-            "cost_usd": cost_usd,
+    messages_for_tools = list(normalized_messages)
+    prompt_tokens_total = 0
+    completion_tokens_total = 0
+    total_tokens_total = 0
+
+    while True:
+        res = _single_completion_call(messages_for_tools)
+        choice = res.choices[0]
+        msg = choice.message
+
+        usage = getattr(res, "usage", None)
+        if usage:
+            try:
+                prompt_tokens_total += getattr(usage, "prompt_tokens", 0) or 0
+                completion_tokens_total += getattr(usage, "completion_tokens", 0) or 0
+                total_tokens_total += getattr(usage, "total_tokens", 0) or 0
+            except Exception:
+                pass
+
+        finish_reason = getattr(choice, "finish_reason", None)
+
+        # If the model is requesting tool calls, execute them and loop again.
+        if finish_reason == "tool_calls" and getattr(msg, "tool_calls", None):
+            # Record the assistant message that requested tool calls
+            tool_calls_payload = []
+            tool_result_messages = []
+            for tc in msg.tool_calls:
+                tc_id = getattr(tc, "id", None)
+                fn = getattr(tc, "function", None)
+                name = getattr(fn, "name", None) if fn else None
+                arguments_str = getattr(fn, "arguments", "{}") if fn else "{}"
+
+                tool_calls_payload.append(
+                    {
+                        "id": tc_id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": arguments_str,
+                        },
+                    }
+                )
+
+                # Execute the corresponding Python tool
+                if name:
+                    try:
+                        args = {}
+                        if isinstance(arguments_str, str) and arguments_str.strip():
+                            try:
+                                args = json.loads(arguments_str)
+                            except json.JSONDecodeError:
+                                # Fall back to empty args if parsing fails
+                                args = {}
+                        tool_callable = get_tool_callable(name)
+                        result = tool_callable(**args) if isinstance(args, dict) else tool_callable(args)
+                    except Exception as exc:
+                        # Surface tool execution errors back to the model
+                        result = {"error": f"Tool '{name}' failed: {exc}"}
+
+                    # Collect the tool result message; we'll append after the assistant message.
+                    tool_result_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc_id,
+                            "name": name,
+                            "content": json.dumps(result),
+                        }
+                    )
+
+            # Append the assistant message that contained the tool_calls first,
+            # then the tool result messages, to preserve chronological order.
+            messages_for_tools.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": tool_calls_payload,
+                }
+            )
+            messages_for_tools.extend(tool_result_messages)
+
+            # Loop again with updated messages to let the model use tool results.
+            continue
+
+        # Otherwise, we have a normal completion (no further tool_calls).
+        final_content = msg.content or ""
+        total = time.perf_counter() - t0
+        cost_usd = _lookup_pricing(model, prompt_tokens_total, completion_tokens_total)
+
+        return {
+            "text": final_content,
+            "metrics": {
+                "ttft_ms": None,  # not meaningful for non-streaming
+                "latency_ms": round(total * 1000, 1),
+                "model": model,
+                "prompt_tokens": prompt_tokens_total or None,
+                "completion_tokens": completion_tokens_total or None,
+                "total_tokens": total_tokens_total or None,
+                "cost_usd": cost_usd,
+            },
         }
-    }

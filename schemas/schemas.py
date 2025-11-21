@@ -27,6 +27,23 @@ class ResponseFormatJsonObject(BaseModel):
 ResponseFormat = Union[ResponseFormatJsonSchema, ResponseFormatJsonObject]
 
 
+class ToolFunction(BaseModel):
+    """Function definition used in tools (OpenAI-style)."""
+
+    model_config = ConfigDict(extra="forbid")
+    name: Annotated[str, Field(min_length=1, max_length=100)]
+    description: Optional[str] = None
+    parameters: Dict[str, Any]
+
+
+class ToolDefinition(BaseModel):
+    """Tool definition, currently limited to function tools."""
+
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["function"] = "function"
+    function: ToolFunction
+
+
 class HealthResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     status: Literal["ok"] = "ok"
@@ -52,6 +69,10 @@ class ChatParams(BaseModel):
     max_tokens: Optional[Annotated[int, Field(ge=1, le=4000)]] = 512
     seed: Optional[Annotated[int, Field(ge=0, le=2_147_483_647)]] = None
     response_format: Optional[ResponseFormat] = None
+    # Optional tool / function-calling configuration (OpenAI-style)
+    tools: Optional[List[ToolDefinition]] = None
+    # 'auto' / 'none' or an OpenAI-style dict for function choice
+    tool_choice: Optional[Union[Literal["auto", "none"], Dict[str, Any]]] = None
 
 class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -60,6 +81,7 @@ class ChatRequest(BaseModel):
     messages: Union[str, List[ChatMessage]]
     params: ChatParams = ChatParams()
     context_prompt: Optional[Annotated[str, Field(min_length=1, max_length=10000)]] = None
+    session_id: Optional[str] = None
 
     @field_validator("provider_id", "model_id")
     @classmethod
@@ -96,6 +118,7 @@ class Metrics(BaseModel):
     completion_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
     cost_usd: Optional[float] = None
+    session_id: Optional[str] = None
 
 class ChatResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")

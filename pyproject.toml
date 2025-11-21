@@ -10,6 +10,7 @@ dependencies = [
     "gradio>=5.47.1",
     "gunicorn>=23.0.0",
     "huggingface-hub[cli]>=0.34.4",
+    "ipykernel>=7.1.0",
     "jinja2>=3.1.6",
     "mlflow-tracing>=3.4.0",
     "openai>=1.102.0",

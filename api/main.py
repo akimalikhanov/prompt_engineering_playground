@@ -108,6 +108,7 @@ def list_models() -> ModelsResponse:
 def chat(body: ChatRequest):
     """Non-streaming chat endpoint with runs logging."""
     trace_id = get_correlation_id()
+    session_id = body.session_id
 
     try:
         # Do NOT start any spans if you want exactly one span total.
@@ -119,17 +120,22 @@ def chat(body: ChatRequest):
             stream=False,
         )
 
+        # Build metrics dict and include session_id
+        metrics = result.get("metrics", {
+            "ttft_ms": None,
+            "latency_ms": 0.0,
+            "model": body.model_id,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "cost_usd": None
+        })
+        if session_id:
+            metrics["session_id"] = session_id
+
         final_res = {
             "text": result["text"],
-            "metrics": result.get("metrics", {
-                "ttft_ms": None,
-                "latency_ms": 0.0,
-                "model": body.model_id,
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
-                "cost_usd": None
-            }),
+            "metrics": metrics,
         }
 
         log_run(
@@ -139,9 +145,10 @@ def chat(body: ChatRequest):
             messages=body.messages,
             params=body.params.model_dump(),
             output_text=result["text"],
-            metrics=result.get("metrics", {}),
+            metrics=metrics,
             status="ok",
             context_prompt=body.context_prompt,
+            session_id=session_id,
         )
         return ChatResponse.model_validate(final_res)
 
@@ -156,6 +163,7 @@ def chat(body: ChatRequest):
             error_type=type(e).__name__,
             error_message=str(e),
             context_prompt=body.context_prompt,
+            session_id=session_id,
         )
         raise
 
@@ -173,6 +181,7 @@ def chat(body: ChatRequest):
 def chat_stream(body: ChatRequest):
     """Streaming chat endpoint with runs logging."""
     trace_id = get_correlation_id()
+    session_id = body.session_id
     
     # For streaming endpoints, we don't use @mlflow.trace() decorator
     # because it causes issues when the function returns a generator.
@@ -200,6 +209,12 @@ def chat_stream(body: ChatRequest):
                         try:
                             metrics_obj = json.loads(chunk.strip())
                             metrics = metrics_obj.get("metrics", {})
+                            # Add session_id to metrics
+                            if session_id:
+                                metrics["session_id"] = session_id
+                            # Re-yield the modified metrics chunk
+                            yield "\n" + json.dumps({"metrics": metrics}) + "\n"
+                            continue
                         except json.JSONDecodeError:
                             pass
                     else:
@@ -218,6 +233,7 @@ def chat_stream(body: ChatRequest):
                     metrics=metrics,
                     status="ok",
                     context_prompt=body.context_prompt,
+                    session_id=session_id,
                 )
             except Exception as e:
                 # Log error
@@ -232,6 +248,7 @@ def chat_stream(body: ChatRequest):
                     error_type=type(e).__name__,
                     error_message=str(e),
                     context_prompt=body.context_prompt,
+                    session_id=session_id,
                 )
                 raise
 
@@ -249,6 +266,7 @@ def chat_stream(body: ChatRequest):
             error_type=type(e).__name__,
             error_message=str(e),
             context_prompt=body.context_prompt,
+            session_id=session_id,
         )
         raise
 
@@ -256,6 +274,7 @@ def chat_stream(body: ChatRequest):
 def chat_stream_sse(body: ChatRequest):
     """SSE streaming chat endpoint with runs logging."""
     trace_id = get_correlation_id()
+    session_id = body.session_id
     
     # For streaming endpoints, we don't use @mlflow.trace() decorator
     # because it causes issues when the function returns a generator.
@@ -291,9 +310,10 @@ def chat_stream_sse(body: ChatRequest):
                                 if data_content:  # Only add non-empty content
                                     accumulated_text += data_content
                     
-                    # Extract metrics from metrics event
+                    # Extract metrics from metrics event and inject session_id
                     if 'event: metrics' in chunk_str:
                         lines = chunk_str.split('\n')
+                        modified_lines = []
                         for line in lines:
                             line = line.strip()
                             if line.startswith('data: '):
@@ -301,8 +321,18 @@ def chat_stream_sse(body: ChatRequest):
                                     json_str = line[6:]  # Skip 'data: ' prefix
                                     if json_str:
                                         metrics = json.loads(json_str)
+                                        # Add session_id to metrics
+                                        if session_id:
+                                            metrics["session_id"] = session_id
+                                        # Reconstruct the line with updated metrics
+                                        modified_lines.append(f"data: {json.dumps(metrics)}")
+                                        continue
                                 except (json.JSONDecodeError, ValueError):
                                     pass
+                            modified_lines.append(line)
+                        # Yield the modified metrics event
+                        yield '\n'.join(modified_lines) + '\n\n'
+                        continue
                     
                     yield chunk
                 
@@ -317,6 +347,7 @@ def chat_stream_sse(body: ChatRequest):
                     metrics=metrics,
                     status="ok",
                     context_prompt=body.context_prompt,
+                    session_id=session_id,
                 )
             except Exception as e:
                 # Log error
@@ -331,6 +362,7 @@ def chat_stream_sse(body: ChatRequest):
                     error_type=type(e).__name__,
                     error_message=str(e),
                     context_prompt=body.context_prompt,
+                    session_id=session_id,
                 )
                 raise
 
@@ -356,6 +388,7 @@ def chat_stream_sse(body: ChatRequest):
             error_type=type(e).__name__,
             error_message=str(e),
             context_prompt=body.context_prompt,
+            session_id=session_id,
         )
         raise
 
@@ -685,6 +718,7 @@ async def handle_validation_error(request: Request, exc: RequestValidationError)
     model_id = "unknown"
     messages = None
     params = {}
+    session_id = None
     
     try:
         # Get the raw request body
@@ -695,6 +729,7 @@ async def handle_validation_error(request: Request, exc: RequestValidationError)
             model_id = body_json.get("model_id", "unknown")
             messages = body_json.get("messages")
             params = body_json.get("params", {})
+            session_id = body_json.get("session_id")
     except Exception:
         # If we can't parse the body, just continue with defaults
         pass
@@ -716,6 +751,7 @@ async def handle_validation_error(request: Request, exc: RequestValidationError)
         status="error",
         error_type="RequestValidationError",
         error_message=error_message,
+        session_id=session_id,
     )
     
     # Return standard FastAPI validation error response
