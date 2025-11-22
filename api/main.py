@@ -17,7 +17,7 @@ from schemas.prompts import (
     PromptMessage
 )
 from services.router import route_call
-from services.runs_logger import log_run, get_run_by_id
+from services.runs_logger import log_run, get_run_by_id, update_run_feedback_by_trace_id
 from services.prompts_service import (
     get_latest_prompts,
     create_prompt,
@@ -132,6 +132,8 @@ def chat(body: ChatRequest):
         })
         if session_id:
             metrics["session_id"] = session_id
+        # Expose trace_id to the UI alongside other metrics
+        metrics["trace_id"] = trace_id
 
         final_res = {
             "text": result["text"],
@@ -213,6 +215,8 @@ def chat_stream(body: ChatRequest):
                             # Add session_id to metrics
                             if session_id:
                                 metrics["session_id"] = session_id
+                            # Also expose trace_id so UI can associate feedback with this run
+                            metrics["trace_id"] = trace_id
                             # Re-yield the modified metrics chunk
                             yield "\n" + json.dumps({"metrics": metrics}) + "\n"
                             continue
@@ -325,6 +329,8 @@ def chat_stream_sse(body: ChatRequest):
                                         # Add session_id to metrics
                                         if session_id:
                                             metrics["session_id"] = session_id
+                                        # Also expose trace_id so UI can associate feedback with this run
+                                        metrics["trace_id"] = trace_id
                                         # Reconstruct the line with updated metrics
                                         modified_lines.append(f"data: {json.dumps(metrics)}")
                                         continue
@@ -700,6 +706,28 @@ def get_run(run_id: int):
     except Exception as e:
         logger.error(f"Error getting run {run_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/runs/feedback", status_code=204)
+def set_run_feedback(body: RunFeedbackRequest):
+    """
+    Update user_feedback for a run, looked up by trace_id.
+    -1 = negative, 0 = neutral/cleared, 1 = positive.
+    """
+    try:
+        updated = update_run_feedback_by_trace_id(
+            trace_id=body.trace_id,
+            user_feedback=body.user_feedback,
+        )
+        if not updated:
+            raise HTTPException(status_code=404, detail="Run not found for given trace_id")
+        # 204 No Content on success
+        return Response(status_code=204)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating run feedback: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update run feedback")
 
 
 # ============================================

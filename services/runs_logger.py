@@ -139,6 +139,7 @@ def log_run(
     variables_json: Optional[List[Dict]] = None,
     metadata: Optional[Dict] = None,
     pricing_snapshot: Optional[Dict] = None,
+    tool_call: Optional[Any] = None,
     # Dict-based parameters (for convenience)
     metrics: Optional[Dict[str, Any]] = None,
     error_info: Optional[Dict[str, str]] = None,
@@ -179,6 +180,7 @@ def log_run(
         variables_json: Template variables used
         metadata: Additional metadata as JSON
         pricing_snapshot: Pricing information snapshot
+        tool_call: Executed tool information to persist to the `tool_call` JSONB column.
         metrics: Dict containing metrics (prompt_tokens, completion_tokens, total_tokens, 
                  cost_usd, latency_ms, ttft_ms). Values from this dict are used if 
                  individual parameters are not provided.
@@ -203,6 +205,9 @@ def log_run(
             latency_ms = int(metrics.get("latency_ms", 0)) if metrics.get("latency_ms") else None
         if ttft_ms is None:
             ttft_ms = int(metrics.get("ttft_ms", 0)) if metrics.get("ttft_ms") else None
+        # If tool_call was not passed explicitly, try to pull it from metrics
+        if tool_call is None:
+            tool_call = metrics.get("executed_tools")
     
     # Extract values from error_info dict if provided and individual params are None
     if error_info:
@@ -247,6 +252,7 @@ def log_run(
             error_message=error_message[:500] if error_message else None,
             pricing_snapshot=pricing_snapshot or {},
             metadata_json=metadata or {},
+            tool_call=tool_call,
         )
         
         session.add(run)
@@ -315,6 +321,7 @@ def get_run_by_id(run_id: int) -> Optional[Dict[str, Any]]:
             "cached": run.cached,
             "pricing_snapshot": run.pricing_snapshot or {},
             "metadata_json": run.metadata_json or {},
+            "tool_call": run.tool_call,
         }
         
         return run_dict
@@ -323,6 +330,37 @@ def get_run_by_id(run_id: int) -> Optional[Dict[str, Any]]:
         logger = logging.getLogger(os.getenv("LOGGER_NAME", "llm-router"))
         logger.error(f"Failed to get run {run_id} from database: {e}", exc_info=True)
         return None
+    finally:
+        session.close()
+
+
+def update_run_feedback_by_trace_id(trace_id: str, user_feedback: int) -> bool:
+    """
+    Update user_feedback for the most recent run with the given trace_id.
+    Returns True if a run was updated, False if no matching run was found.
+    """
+    session = SessionLocal()
+    try:
+        run = (
+            session.query(Run)
+            .filter(Run.trace_id == trace_id)
+            .order_by(Run.occurred_at.desc())
+            .first()
+        )
+
+        if not run:
+            return False
+
+        run.user_feedback = user_feedback
+        session.commit()
+        return True
+    except Exception as e:
+        session.rollback()
+        import logging
+
+        logger = logging.getLogger(os.getenv("LOGGER_NAME", "llm-router"))
+        logger.error(f"Failed to update user_feedback for trace_id={trace_id}: {e}", exc_info=True)
+        return False
     finally:
         session.close()
 

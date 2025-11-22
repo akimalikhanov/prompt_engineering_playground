@@ -1,7 +1,7 @@
 """
 SQLAlchemy model for app.runs table
 """
-from sqlalchemy import Column, BigInteger, Integer, String, Text, Boolean, TIMESTAMP, Numeric, Computed, text
+from sqlalchemy import Column, BigInteger, Integer, SmallInteger, String, Text, Boolean, TIMESTAMP, Numeric, Computed, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -49,6 +49,10 @@ class Run(Base):
     cached = Column(Boolean, nullable=False, server_default=text("false"))
     pricing_snapshot = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     metadata_json = Column("metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+
+    # User feedback and tool calls (added later)
+    user_feedback = Column(SmallInteger, nullable=False, server_default=text("0"))
+    tool_call = Column(JSONB)
 
     def __repr__(self):
         return f"<Run(id={self.id}, trace_id='{self.trace_id}', model='{self.model_id}', status='{self.status}')>"

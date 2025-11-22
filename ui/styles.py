@@ -56,6 +56,28 @@ ENHANCED_UI_CSS = """
     font-size: 16px !important;
     font-weight: 600 !important;
 }
+
+/* Chatbot message action buttons: ensure Copy -> Like -> Dislike order */
+button[aria-label*="Copy"] {
+    order: 1;
+}
+
+button[aria-label*="Like"] {
+    order: 2;
+}
+
+button[aria-label*="Dislike"] {
+    order: 3;
+}
+
+/* Add explicit spacing between buttons (works regardless of parent layout) */
+button[aria-label*="Like"] {
+    margin-left: 0.5rem !important;
+}
+
+button[aria-label*="Dislike"] {
+    margin-left: 0.5rem !important;
+}
 """
 
 NOTE_CSS = """

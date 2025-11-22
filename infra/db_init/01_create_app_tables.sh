@@ -64,8 +64,6 @@ CREATE TABLE IF NOT EXISTS app.prompt_examples (
     -- JSON schema template (only used when response_format='json_schema')
     json_schema_template JSONB,  -- NULL if not using json_schema, JSON schema definition if using json_schema
     
-    tool_config         JSONB,  -- NULL = not used, JSON = on + config
-
     is_active           BOOLEAN NOT NULL DEFAULT TRUE,
 
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -120,6 +118,9 @@ CREATE TABLE IF NOT EXISTS app.runs (
   error_type        TEXT,
   error_code        TEXT,
   error_message     TEXT,
+
+  user_feedback     SMALLINT NOT NULL DEFAULT 0 CHECK (user_feedback IN (-1, 0, 1)),  -- -1 = negative, 0 = neutral/default, 1 = positive
+  tool_call         JSONB,                                           -- JSON array or object of user tool names; NULL when unused
 
   cached            BOOLEAN NOT NULL DEFAULT FALSE,
   pricing_snapshot  JSONB NOT NULL DEFAULT '{}'::jsonb,             -- {"input_per_1k":0.15,...}

@@ -1,5 +1,5 @@
-import os, time, json
-from typing import Generator, Optional, Literal, Union
+import os, time, json, uuid
+from typing import Generator, Optional, Literal, Union, List, Dict, Any
 from dataclasses import dataclass
 
 import openai
@@ -13,6 +13,178 @@ from utils.load_configs import _load_models_config
 class ToolStatusMarker:
     """Marker to indicate tool execution status in streaming."""
     tool_names: list
+
+
+def _split_concatenated_tool_names(raw_name: Optional[str], known_tool_names: List[str]) -> List[str]:
+    """
+    Some providers (e.g., Gemini via OpenAI-compatible APIs) may stream tool names
+    in a way that causes multiple tool names to be concatenated into a single string,
+    e.g. 'get_fmp_company_datasearch_arxiv'.
+
+    Attempt to split the raw string into a sequence of known tool names using greedy prefix matching.
+    Returns a list of tool names if successful, otherwise an empty list.
+    """
+    if not raw_name:
+        return []
+
+    s = raw_name.strip()
+    if not s:
+        return []
+
+    # If it's already a known tool name, return as-is
+    normalized_known = [name.strip() for name in known_tool_names if isinstance(name, str) and name.strip()]
+    if s in normalized_known:
+        return [s]
+
+    result: List[str] = []
+    remaining = s
+    # Greedy longest-prefix matching to reduce ambiguity
+    sorted_known = sorted(set(normalized_known), key=len, reverse=True)
+
+    while remaining:
+        match = None
+        for name in sorted_known:
+            if remaining.startswith(name):
+                match = name
+                break
+        if not match:
+            return []
+        result.append(match)
+        remaining = remaining[len(match):]
+
+    return result if result else []
+
+
+def _split_concatenated_json_objects(raw: Optional[str]) -> List[str]:
+    """
+    Split a string containing one or more concatenated JSON objects (e.g., '{"a":1}{"b":2}')
+    into individual JSON strings. Returns an empty list if the string cannot be cleanly split.
+    """
+    if raw is None:
+        return []
+
+    candidate = raw.strip()
+    if not candidate:
+        return []
+
+    # Fast path: if it's valid JSON as-is, no split is needed
+    try:
+        json.loads(candidate)
+        return [candidate]
+    except json.JSONDecodeError:
+        pass
+
+    segments: List[str] = []
+    depth = 0
+    in_string = False
+    escape = False
+    start = 0
+
+    for idx, char in enumerate(candidate):
+        if char == '"' and not escape:
+            in_string = not in_string
+        if not in_string:
+            if char in "{[":
+                depth += 1
+            elif char in "}]":
+                depth = max(depth - 1, 0)
+        if char == "\\" and not escape:
+            escape = True
+        else:
+            escape = False
+
+        if depth == 0 and not in_string:
+            segment = candidate[start : idx + 1].strip()
+            if segment:
+                segments.append(segment)
+            start = idx + 1
+
+    # Append any trailing segment (e.g., whitespace between objects)
+    if start < len(candidate):
+        tail = candidate[start:].strip()
+        if tail:
+            segments.append(tail)
+
+    if not segments:
+        return []
+
+    cleaned_segments: List[str] = []
+    for segment in segments:
+        try:
+            json.loads(segment)
+            cleaned_segments.append(segment)
+        except json.JSONDecodeError:
+            return []
+
+    return cleaned_segments
+
+
+def _expand_tool_calls(
+    call_id: Optional[str],
+    raw_name: Optional[str],
+    raw_arguments: Optional[str],
+    known_tool_names: List[str],
+) -> List[Dict[str, Any]]:
+    """
+    Normalize/expand a potentially malformed tool call coming from a streaming chunk.
+
+    - Splits concatenated tool names into separate tool call entries when the provider
+      incorrectly merges them.
+    - Attempts to split concatenated JSON argument payloads to match the number of tool names.
+
+    Returns a list of normalized tool call dicts ready to be appended to the conversation.
+    """
+    name = (raw_name or "").strip()
+    args_str = (raw_arguments or "").strip()
+    if not name:
+        return []
+
+    split_names = _split_concatenated_tool_names(name, known_tool_names)
+    if not split_names:
+        split_names = [name]
+
+    base_id = call_id or f"tc_{uuid.uuid4().hex}"
+
+    # If we have multiple names, try to split the arguments into matching chunks.
+    if len(split_names) > 1:
+        arg_chunks = _split_concatenated_json_objects(args_str)
+        if arg_chunks and len(arg_chunks) == len(split_names):
+            payloads = []
+            for idx, tool_name in enumerate(split_names):
+                payloads.append(
+                    {
+                        "id": f"{base_id}_{idx}",
+                        "type": "function",
+                        "function": {
+                            "name": tool_name,
+                            "arguments": arg_chunks[idx],
+                        },
+                    }
+                )
+            return payloads
+        # If we cannot confidently split arguments, fall back to the raw combined call.
+        return [
+            {
+                "id": base_id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": args_str,
+                },
+            }
+        ]
+
+    # Single tool name (already normalized)
+    return [
+        {
+            "id": base_id,
+            "type": "function",
+            "function": {
+                "name": split_names[0],
+                "arguments": args_str,
+            },
+        }
+    ]
 
 
 MAX_TOOL_ITERATIONS = 5
@@ -167,10 +339,27 @@ def _unified_openai_api_call(
     tools = params.get("tools")
     tool_choice = params.get("tool_choice")
 
+    known_tool_names: List[str] = []
     if tools:
         kwargs["tools"] = [
             t.model_dump() if hasattr(t, "model_dump") else t for t in tools
         ]
+        # Track known tool names for cleaning up malformed streaming payloads
+        for t in tools:
+            fn = None
+            if hasattr(t, "function"):
+                fn = getattr(t, "function", None)
+            elif isinstance(t, dict):
+                fn = t.get("function")
+            if not fn:
+                continue
+            name = None
+            if hasattr(fn, "name"):
+                name = getattr(fn, "name", None)
+            elif isinstance(fn, dict):
+                name = fn.get("name")
+            if isinstance(name, str) and name.strip():
+                known_tool_names.append(name.strip())
     if tool_choice is not None:
         # tool_choice is already a primitive/union type in ChatParams
         kwargs["tool_choice"] = tool_choice
@@ -249,37 +438,50 @@ def _unified_openai_api_call(
             # End of stream for this turn. Check if we need to execute tools.
             if finish_reason == "tool_calls" and tool_calls_buffer:
                 # 1. Reconstruct the assistant message with tool calls
-                tool_calls_payload = []
+                tool_calls_payload: List[Dict[str, Any]] = []
+                tool_exec_entries: List[Dict[str, Any]] = []
                 current_tool_signatures = []  # Track tool name + arguments for loop detection
                 for idx in sorted(tool_calls_buffer.keys()):
                     tc_data = tool_calls_buffer[idx]
-                    tool_name = tc_data["name"].strip() if tc_data["name"] else ""
-                    tool_args = tc_data["arguments"].strip() if tc_data["arguments"] else ""
-                    
-                    # Skip if tool name is empty or malformed
-                    if not tool_name:
+                    raw_name = tc_data["name"].strip() if tc_data["name"] else ""
+                    raw_args = tc_data["arguments"].strip() if tc_data["arguments"] else ""
+
+                    if not raw_name:
                         continue
-                    
-                    # Detect and fix duplicated tool names (e.g., "get_fmp_company_dataget_fmp_company_data")
-                    # This can happen if the name is sent in chunks and gets duplicated
-                    name_length = len(tool_name)
+
+                    # Detect and fix duplicated tool names (e.g., "foofoo")
+                    name_length = len(raw_name)
                     if name_length > 0:
-                        # Check if the name appears to be duplicated (first half == second half)
                         half = name_length // 2
-                        if name_length % 2 == 0 and tool_name[:half] == tool_name[half:]:
-                            tool_name = tool_name[:half]  # Use only the first half
-                    
-                    tool_signature = (tool_name, tool_args)
-                    current_tool_signatures.append(tool_signature)
-                    
-                    tool_calls_payload.append({
-                        "id": tc_data["id"].strip() if tc_data["id"] else "",
-                        "type": "function",
-                        "function": {
-                            "name": tool_name,
-                            "arguments": tool_args
-                        }
-                    })
+                        if name_length % 2 == 0 and raw_name[:half] == raw_name[half:]:
+                            raw_name = raw_name[:half]
+
+                    expanded_calls = _expand_tool_calls(
+                        call_id=tc_data["id"].strip() if tc_data["id"] else None,
+                        raw_name=raw_name,
+                        raw_arguments=raw_args,
+                        known_tool_names=known_tool_names,
+                    )
+
+                    if not expanded_calls:
+                        continue
+
+                    for call in expanded_calls:
+                        function = call.get("function") or {}
+                        tool_name = (function.get("name") or "").strip()
+                        tool_args = (function.get("arguments") or "").strip()
+                        if not tool_name:
+                            continue
+
+                        tool_calls_payload.append(call)
+                        tool_exec_entries.append(
+                            {
+                                "id": call.get("id"),
+                                "name": tool_name,
+                                "arguments": tool_args,
+                            }
+                        )
+                        current_tool_signatures.append((tool_name, tool_args))
                 
                 # Check for repeated identical tool calls (loop detection)
                 if _is_tool_loop(recent_tool_calls, current_tool_signatures):
@@ -305,10 +507,10 @@ def _unified_openai_api_call(
                 # 2. Execute tools
                 executed_tool_names = []
                 seen_tool_calls = set()  # Track unique tool calls to avoid duplicates
-                for tc in tool_calls_payload:
-                    func_name = tc["function"]["name"]
-                    func_args_str = tc["function"]["arguments"]
-                    call_id = tc["id"]
+                for tc in tool_exec_entries:
+                    func_name = tc["name"]
+                    func_args_str = tc["arguments"]
+                    call_id = tc.get("id")
                     
                     # Validate and clean tool name (strip whitespace, handle empty/malformed names)
                     if not func_name or not isinstance(func_name, str):
@@ -438,6 +640,7 @@ def _unified_openai_api_call(
             def _iter_raw() -> Generator[str, None, None]:
                 ttft = None
                 chunk_count = 0
+                executed_tools = set()
                 usage_totals = {
                     "prompt_tokens": None,
                     "completion_tokens": None,
@@ -448,6 +651,7 @@ def _unified_openai_api_call(
                     # Handle ToolStatusMarker
                     if isinstance(piece, ToolStatusMarker):
                         for tool_name in _iter_unique_tool_names(piece.tool_names):
+                            executed_tools.add(tool_name)
                             tool_msg = {"tool_status": f"🔧 `{tool_name}` is executed..."}
                             yield "\n" + json.dumps(tool_msg) + "\n"
                         continue
@@ -466,7 +670,10 @@ def _unified_openai_api_call(
 
                 total = time.perf_counter() - t0
                 if include_metrics:
-                    metrics = {"metrics": _build_metrics_payload(ttft, total, chunk_count, usage_totals)}
+                    metrics_payload = _build_metrics_payload(ttft, total, chunk_count, usage_totals)
+                    if executed_tools:
+                        metrics_payload["executed_tools"] = sorted(executed_tools)
+                    metrics = {"metrics": metrics_payload}
                     # emit a newline + JSON so curl clients can read it cleanly
                     yield "\n" + json.dumps(metrics) + "\n"
             return _iter_raw()
@@ -475,6 +682,7 @@ def _unified_openai_api_call(
         def _iter_sse() -> Generator[bytes, None, None]:
             ttft = None
             chunk_count = 0
+            executed_tools = set()
             usage_totals = {
                 "prompt_tokens": None,
                 "completion_tokens": None,
@@ -485,6 +693,7 @@ def _unified_openai_api_call(
                 # Handle ToolStatusMarker
                 if isinstance(piece, ToolStatusMarker):
                     for tool_name in _iter_unique_tool_names(piece.tool_names):
+                        executed_tools.add(tool_name)
                         tool_msg = f"🔧 `{tool_name}` is executed..."
                         yield sse_pack(tool_msg, event="tool_status")
                     continue
@@ -505,6 +714,8 @@ def _unified_openai_api_call(
                 yield sse_pack("done", event="status")
             if include_metrics:
                 payload = _build_metrics_payload(ttft, total, chunk_count, usage_totals)
+                if executed_tools:
+                    payload["executed_tools"] = sorted(executed_tools)
                 yield sse_pack(json.dumps(payload), event="metrics")
         return _iter_sse()
         
@@ -548,11 +759,43 @@ def _unified_openai_api_call(
         if finish_reason == "tool_calls" and getattr(msg, "tool_calls", None):
             # Track current tool call signatures for loop detection
             current_tool_signatures = []
+            tool_calls_payload: List[Dict[str, Any]] = []
+            tool_result_messages = []
+            tool_exec_entries: List[Dict[str, Any]] = []
+
             for tc in msg.tool_calls:
+                tc_id = getattr(tc, "id", None)
                 fn = getattr(tc, "function", None)
-                name = getattr(fn, "name", None) if fn else None
-                arguments_str = getattr(fn, "arguments", "{}") if fn else "{}"
-                current_tool_signatures.append((name, arguments_str))
+                raw_name = getattr(fn, "name", None) if fn else None
+                raw_args = getattr(fn, "arguments", "{}") if fn else "{}"
+
+                if isinstance(raw_name, str) and raw_name:
+                    name_length = len(raw_name)
+                    if name_length > 0:
+                        half = name_length // 2
+                        if name_length % 2 == 0 and raw_name[:half] == raw_name[half:]:
+                            raw_name = raw_name[:half]
+
+                expanded_calls = _expand_tool_calls(
+                    call_id=tc_id,
+                    raw_name=raw_name,
+                    raw_arguments=raw_args,
+                    known_tool_names=known_tool_names,
+                )
+
+                for call in expanded_calls:
+                    tool_calls_payload.append(call)
+                    function = call.get("function") or {}
+                    tool_name = (function.get("name") or "").strip()
+                    tool_args = (function.get("arguments") or "").strip()
+                    current_tool_signatures.append((tool_name, tool_args))
+                    tool_exec_entries.append(
+                        {
+                            "id": call.get("id"),
+                            "name": tool_name,
+                            "arguments": tool_args,
+                        }
+                    )
             
             # Check for repeated identical tool calls (loop detection)
             if _is_tool_loop(recent_tool_calls, current_tool_signatures):
@@ -564,53 +807,37 @@ def _unified_openai_api_call(
             if len(recent_tool_calls) > 5:
                 recent_tool_calls.pop(0)
             # Record the assistant message that requested tool calls
-            tool_calls_payload = []
-            tool_result_messages = []
-            for tc in msg.tool_calls:
-                tc_id = getattr(tc, "id", None)
-                fn = getattr(tc, "function", None)
-                name = getattr(fn, "name", None) if fn else None
-                arguments_str = getattr(fn, "arguments", "{}") if fn else "{}"
+            for tc in tool_exec_entries:
+                name = tc["name"]
+                arguments_str = tc["arguments"]
+                tc_id = tc.get("id")
 
-                tool_calls_payload.append(
+                if not name:
+                    continue
+
+                if name not in executed_tools:
+                    executed_tools.append(name)
+
+                try:
+                    args = {}
+                    if isinstance(arguments_str, str) and arguments_str.strip():
+                        try:
+                            args = json.loads(arguments_str)
+                        except json.JSONDecodeError:
+                            args = {}
+                    tool_callable = get_tool_callable(name)
+                    result = tool_callable(**args) if isinstance(args, dict) else tool_callable(args)
+                except Exception as exc:
+                    result = {"error": f"Tool '{name}' failed: {exc}"}
+
+                tool_result_messages.append(
                     {
-                        "id": tc_id,
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "arguments": arguments_str,
-                        },
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "name": name,
+                        "content": json.dumps(result),
                     }
                 )
-
-                # Execute the corresponding Python tool
-                if name:
-                    # Track that this tool was executed
-                    if name not in executed_tools:
-                        executed_tools.append(name)
-                    try:
-                        args = {}
-                        if isinstance(arguments_str, str) and arguments_str.strip():
-                            try:
-                                args = json.loads(arguments_str)
-                            except json.JSONDecodeError:
-                                # Fall back to empty args if parsing fails
-                                args = {}
-                        tool_callable = get_tool_callable(name)
-                        result = tool_callable(**args) if isinstance(args, dict) else tool_callable(args)
-                    except Exception as exc:
-                        # Surface tool execution errors back to the model
-                        result = {"error": f"Tool '{name}' failed: {exc}"}
-
-                    # Collect the tool result message; we'll append after the assistant message.
-                    tool_result_messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tc_id,
-                            "name": name,
-                            "content": json.dumps(result),
-                        }
-                    )
 
             # Append the assistant message that contained the tool_calls first,
             # then the tool result messages, to preserve chronological order.

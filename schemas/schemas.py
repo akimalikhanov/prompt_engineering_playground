@@ -119,6 +119,7 @@ class Metrics(BaseModel):
     total_tokens: Optional[int] = None
     cost_usd: Optional[float] = None
     session_id: Optional[str] = None
+    trace_id: Optional[str] = None
     executed_tools: Optional[List[str]] = None
 
 class ChatResponse(BaseModel):
@@ -161,3 +162,12 @@ class RunResponse(BaseModel):
     cached: bool = False
     pricing_snapshot: Dict[str, Any] = {}
     metadata_json: Dict[str, Any] = {}
+
+
+class RunFeedbackRequest(BaseModel):
+    """Payload for updating user feedback on a run, looked up by trace_id."""
+
+    model_config = ConfigDict(extra="forbid")
+    trace_id: Annotated[str, Field(min_length=1, max_length=200)]
+    # -1 = negative, 0 = neutral/cleared, 1 = positive
+    user_feedback: Annotated[int, Field(ge=-1, le=1)]

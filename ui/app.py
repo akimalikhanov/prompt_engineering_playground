@@ -61,7 +61,8 @@ def _ensure_session_state(
         session_expired: True if a previous session expired (vs. first time visit)
     """
     now = time.time()
-    state = session_state or {}
+    # Shallow copy so we can add new keys (like trace map) without losing existing ones.
+    state = dict(session_state) if isinstance(session_state, dict) else {}
     session_id = state.get("session_id")
     last_activity = state.get("last_activity")
 
@@ -81,11 +82,17 @@ def _ensure_session_state(
         session_id = str(uuid.uuid4())
         last_activity = now
         started_new_session = True
+        # Reset custom state (e.g., trace maps) when starting new session
+        state = {}
     else:
         # Existing session, just bump activity time
         last_activity = now
 
-    new_state = {"session_id": session_id, "last_activity": last_activity}
+    state["session_id"] = session_id
+    state["last_activity"] = last_activity
+    # Ensure trace map exists so we can store trace IDs per message
+    state.setdefault("trace_map", {})
+    new_state = state
     return session_id, new_state, started_new_session, session_expired
 
 
@@ -94,7 +101,7 @@ def _update_session_from_metrics(
     session_state_out: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Update session_state from session_id in metrics if present.
+    Update session_state from session_id (and related tracking fields) in metrics if present.
     
     Args:
         metrics: Metrics dict that may contain session_id
@@ -107,6 +114,141 @@ def _update_session_from_metrics(
         session_state_out["session_id"] = metrics["session_id"]
         session_state_out["last_activity"] = time.time()
     return session_state_out
+
+
+def _record_trace_id_from_metrics(
+    history: List[Dict[str, Any]],
+    metrics: Dict[str, Any],
+    session_state_out: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Record the trace_id from metrics into session_state's trace_map for the latest
+    assistant message. We return history unchanged for backwards compatibility.
+    """
+    trace_id = metrics.get("trace_id")
+    if not trace_id or not history:
+        return history
+
+    # Walk backwards to find the latest assistant message that is not a tool_status line.
+    if session_state_out is None:
+        return history
+
+    trace_map = session_state_out.setdefault("trace_map", {})
+    
+    for idx in range(len(history) - 1, -1, -1):
+        msg = history[idx]
+        if msg.get("role") != "assistant":
+            continue
+        content = str(msg.get("content", ""))
+        if content.startswith("🔧"):
+            continue
+        trace_map[idx] = trace_id
+        break
+
+    return history
+
+
+def _send_feedback_to_backend(
+    trace_id: Optional[str],
+    user_feedback: int,
+    api_base_url: Optional[str],
+) -> bool:
+    """
+    POST feedback to the backend feedback endpoint.
+    Returns True if request succeeded, False otherwise.
+    """
+    if not trace_id:
+        # Debug: nothing to send if trace is missing
+        # print("[feedback] skipping feedback: missing trace_id")
+        return False
+
+    try:
+        api_url = resolve_api_base(api_base_url, DEFAULT_API_BASE_URL)
+        feedback_url = f"{api_url.rstrip('/')}/runs/feedback"
+        payload = {"trace_id": trace_id, "user_feedback": user_feedback}
+        # print(f"[feedback] posting payload={payload} to {feedback_url}")
+        with httpx.Client(timeout=10.0) as client:
+            response = client.post(feedback_url, json=payload)
+            response.raise_for_status()
+        # print(f"[feedback] success trace_id={trace_id}")
+        return True
+    except Exception as exc:
+        # print(f"[feedback] failed trace_id={trace_id}: {exc}")
+        return False
+
+
+def _apply_feedback_to_message(
+    history: List[Dict[str, Any]],
+    index: Optional[int],
+    liked_state: Optional[bool],
+) -> List[Dict[str, Any]]:
+    """
+    Apply user_feedback to a specific assistant message (by index) in the chat history.
+    This only updates local UI state; backend persistence will be handled separately.
+    """
+    if not history:
+        return history
+    if index is None or index < 0 or index >= len(history):
+        return history
+
+    msg = history[index] or {}
+    if msg.get("role") != "assistant":
+        return history
+
+    content = str(msg.get("content", ""))
+    if content.startswith("🔧"):
+        # Skip tool status messages
+        return history
+
+    # Map liked_state to feedback value only; do not modify displayed content.
+    # True=1, False=-1, None=0 (cleared)
+    if liked_state is True:
+        feedback_value = 1
+    elif liked_state is False:
+        feedback_value = -1
+    else:
+        feedback_value = 0
+
+    msg["user_feedback"] = feedback_value
+
+    return history
+
+
+def _on_like_event(
+    evt: "gr.LikeData",
+    history: List[Dict[str, Any]],
+    api_base_url: Optional[str],
+    session_state: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """
+    Gradio Chatbot.like callback.
+    evt.liked:
+      - True  -> thumbs up
+      - False -> thumbs down
+      - None  -> reaction cleared
+    """
+    history = history or []
+    index = getattr(evt, "index", None)
+    liked_state = getattr(evt, "liked", None)
+
+    history = _apply_feedback_to_message(history, index, liked_state)
+
+    # After updating local UI, send feedback upstream if we know the trace_id.
+    user_feedback = 0
+    if (
+        index is not None
+        and 0 <= index < len(history)
+        and isinstance(history[index], dict)
+    ):
+        user_feedback = history[index].get("user_feedback", 0)
+
+    trace_id = None
+    if isinstance(session_state, dict):
+        trace_map = session_state.get("trace_map") or {}
+        trace_id = trace_map.get(index)
+
+    _send_feedback_to_backend(trace_id, user_feedback, api_base_url)
+    return history
 
 
 def stream_chat(
@@ -312,6 +454,12 @@ def stream_chat(
                                                 metrics.update(metrics_data)
                                                 # Update session_state if session_id is in metrics
                                                 session_state_out = _update_session_from_metrics(metrics, session_state_out)
+                                                # Attach trace_id (if present) to the main assistant message
+                                                running_history = _record_trace_id_from_metrics(
+                                                    running_history,
+                                                    metrics,
+                                                    session_state_out,
+                                                )
                                             except json.JSONDecodeError:
                                                 pass
                                     continue
@@ -345,7 +493,11 @@ def stream_chat(
                                     if running_history[-1].get("role") == "user" or is_tool_status:
                                         running_history.append({"role": "assistant", "content": accumulated_response})
                                     else:
-                                        running_history[-1] = {"role": "assistant", "content": accumulated_response}
+                                        # Preserve any metadata (trace_id, feedback state) when updating content
+                                        if isinstance(running_history[-1], dict):
+                                            running_history[-1]["content"] = accumulated_response
+                                        else:
+                                            running_history[-1] = {"role": "assistant", "content": accumulated_response}
                                     latency_now = (time.perf_counter() - start_time) * 1000.0
                                     yield running_history, format_metrics_badges(metrics, ttft_ms, latency_now), session_state_out
                         # Process any remaining buffer content (incomplete final event)
@@ -361,6 +513,12 @@ def stream_chat(
                                             metrics.update(metrics_data)
                                             # Update session_state if session_id is in metrics
                                             session_state_out = _update_session_from_metrics(metrics, session_state_out)
+                                            # Attach trace_id (if present) to the main assistant message
+                                            running_history = _record_trace_id_from_metrics(
+                                                running_history,
+                                                metrics,
+                                                session_state_out,
+                                            )
                                         except json.JSONDecodeError:
                                             pass
                             # Process tool_status events
@@ -398,7 +556,10 @@ def stream_chat(
                                     if running_history[-1].get("role") == "user" or is_tool_status:
                                         running_history.append({"role": "assistant", "content": accumulated_response})
                                     else:
-                                        running_history[-1] = {"role": "assistant", "content": accumulated_response}
+                                        if isinstance(running_history[-1], dict):
+                                            running_history[-1]["content"] = accumulated_response
+                                        else:
+                                            running_history[-1] = {"role": "assistant", "content": accumulated_response}
                                     latency_now = (time.perf_counter() - start_time) * 1000.0
                                     yield running_history, format_metrics_badges(metrics, ttft_ms, latency_now), session_state_out
                     else:
@@ -412,6 +573,12 @@ def stream_chat(
                                     metrics = metrics_obj.get("metrics", metrics_obj)
                                     # Update session_state if session_id is in metrics
                                     session_state_out = _update_session_from_metrics(metrics, session_state_out)
+                                    # Attach trace_id (if present) to the main assistant message
+                                    running_history = _record_trace_id_from_metrics(
+                                        running_history,
+                                        metrics,
+                                        session_state_out,
+                                    )
                                 except json.JSONDecodeError:
                                     pass
                                 continue
@@ -442,7 +609,10 @@ def stream_chat(
                             if running_history[-1].get("role") == "user" or is_tool_status:
                                 running_history.append({"role": "assistant", "content": accumulated_response})
                             else:
-                                running_history[-1] = {"role": "assistant", "content": accumulated_response}
+                                if isinstance(running_history[-1], dict):
+                                    running_history[-1]["content"] = accumulated_response
+                                else:
+                                    running_history[-1] = {"role": "assistant", "content": accumulated_response}
                             latency_now = (time.perf_counter() - start_time) * 1000.0
                             yield running_history, format_metrics_badges(metrics, ttft_ms, latency_now), session_state_out
             else:
@@ -472,6 +642,12 @@ def stream_chat(
                 
                 # Update session_state if session_id is in metrics
                 session_state_out = _update_session_from_metrics(metrics, session_state_out)
+                # Attach trace_id (if present) to the main assistant message
+                running_history = _record_trace_id_from_metrics(
+                    running_history,
+                    metrics,
+                    session_state_out,
+                )
 
                 if ttft_ms is None and metrics.get("ttft_ms") is not None:
                     ttft_ms = metrics["ttft_ms"]
@@ -515,7 +691,10 @@ def stream_chat(
         if running_history[-1].get("role") == "user" or is_tool_status:
             running_history.append({"role": "assistant", "content": accumulated_response})
         else:
-            running_history[-1] = {"role": "assistant", "content": accumulated_response}
+            if isinstance(running_history[-1], dict):
+                running_history[-1]["content"] = accumulated_response
+            else:
+                running_history[-1] = {"role": "assistant", "content": accumulated_response}
     else:
         running_history.append({"role": "assistant", "content": accumulated_response})
     yield running_history, format_metrics_badges(metrics, ttft_ms, final_latency), session_state_out
@@ -693,7 +872,7 @@ def build_demo() -> gr.Blocks:
                     # avatar_images: [user, assistant]; None = no avatar
                     avatar_images=[
                         None,  # no user icon
-                        "utils/icons/icons8-ai-240.png",  # assistant icon only
+                        "utils/icons/icons8-bot-96.png",  # assistant icon only
                     ],
                 )
                 user_input = gr.Textbox(
@@ -740,6 +919,12 @@ def build_demo() -> gr.Blocks:
                             value=DEFAULT_API_BASE_URL,
                             placeholder="http://localhost:8000",
                             elem_classes=["scroll-text"],
+                        )
+                        # Wire the chatbot like/dislike control now that we know API base input.
+                        chatbot.like(
+                            _on_like_event,
+                            inputs=[chatbot, api_base_box, session_state],
+                            outputs=[chatbot],
                         )
 
                     # Tabs for logical grouping
