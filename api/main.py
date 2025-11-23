@@ -1,8 +1,8 @@
 from fastapi import FastAPI, HTTPException, Query, Response, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
-from typing import Generator, Optional
-from utils.errors import BackendError
+from typing import Any, Dict, Generator, Optional
+from utils.errors import BackendError, _stream_error_payload
 from utils.sse import sse_pack
 from utils.load_configs import _load_models_config
 from schemas.schemas import *
@@ -17,7 +17,12 @@ from schemas.prompts import (
     PromptMessage
 )
 from services.router import route_call
-from services.runs_logger import log_run, get_run_by_id, update_run_feedback_by_trace_id
+from services.runs_logger import (
+    log_run,
+    get_run_by_id,
+    update_run_feedback_by_trace_id,
+    _log_chat_failure,
+)
 from services.prompts_service import (
     get_latest_prompts,
     create_prompt,
@@ -27,7 +32,7 @@ from services.prompts_service import (
     get_prompt_by_id_and_version,
     update_prompt_status
 )
-from utils.logging import setup_logging, correlation_id_middleware, get_correlation_id
+from utils.logger_new import setup_logging, correlation_id_middleware, get_correlation_id
 from utils.jinja_renderer import render_messages
 from dotenv import load_dotenv
 import os
@@ -77,8 +82,8 @@ logger = setup_logging(
     app_logger_name=os.getenv("LOGGER_NAME", "llm-router"),
     level=20,                 # logging.INFO
     to_console=True,
-    to_file=True,
-    file_path="logs/app.log", # stored locally in ./logs
+    to_file=False,
+    # file_path="logs/app.log", # stored locally in ./logs
     hijack_uvicorn=True,      # <- key to avoid duplicate uvicorn+app logs
 )
 
@@ -118,6 +123,9 @@ def chat(body: ChatRequest):
             messages=[m.model_dump() for m in body.messages] if isinstance(body.messages, list) else body.messages,
             params=body.params.model_dump(),
             stream=False,
+            backend_endpoint="/chat",
+            trace_id=trace_id,
+            session_id=session_id,
         )
 
         # Build metrics dict and include session_id
@@ -197,7 +205,10 @@ def chat_stream(body: ChatRequest):
             messages=[m.model_dump() for m in body.messages] if isinstance(body.messages, list) else body.messages,
             params=body.params.model_dump(),
             stream=True,
-            stream_mode="raw"
+            stream_mode="raw",
+            backend_endpoint="/chat.stream",
+            trace_id=trace_id,
+            session_id=session_id,
         )
 
         # Wrap generator to collect output and metrics
@@ -240,40 +251,27 @@ def chat_stream(body: ChatRequest):
                     context_prompt=body.context_prompt,
                     session_id=session_id,
                 )
-            except Exception as e:
-                # Log error
-                log_run(
+            except Exception as exc:
+                normalized_error = _log_chat_failure(
+                    exc,
                     trace_id=trace_id,
-                    provider_key=body.provider_id,
-                    model_id=body.model_id,
-                    messages=body.messages,
-                    params=body.params.model_dump(),
-                    output_text=accumulated_text if accumulated_text else None,
-                    status="error",
-                    error_type=type(e).__name__,
-                    error_message=str(e),
-                    context_prompt=body.context_prompt,
+                    body=body,
                     session_id=session_id,
+                    accumulated_text=accumulated_text,
                 )
-                raise
+                yield "\n" + json.dumps(_stream_error_payload(normalized_error)) + "\n"
+                return
 
         return StreamingResponse(logged_generator(), media_type="text/plain")
     
-    except Exception as e:
-        # Log error if it happens before streaming starts
-        log_run(
+    except Exception as exc:
+        normalized_error = _log_chat_failure(
+            exc,
             trace_id=trace_id,
-            provider_key=body.provider_id,
-            model_id=body.model_id,
-            messages=body.messages,
-            params=body.params.model_dump(),
-            status="error",
-            error_type=type(e).__name__,
-            error_message=str(e),
-            context_prompt=body.context_prompt,
+            body=body,
             session_id=session_id,
         )
-        raise
+        raise normalized_error
 
 @app.post("/chat.streamsse", response_class=StreamingResponse)
 def chat_stream_sse(body: ChatRequest):
@@ -293,6 +291,9 @@ def chat_stream_sse(body: ChatRequest):
             params=body.params.model_dump(),
             stream=True,
             stream_mode="sse",
+            backend_endpoint="/chat.streamsse",
+            trace_id=trace_id,
+            session_id=session_id,
         )
 
         def logged_generator():
@@ -356,22 +357,16 @@ def chat_stream_sse(body: ChatRequest):
                     context_prompt=body.context_prompt,
                     session_id=session_id,
                 )
-            except Exception as e:
-                # Log error
-                log_run(
+            except Exception as exc:
+                normalized_error = _log_chat_failure(
+                    exc,
                     trace_id=trace_id,
-                    provider_key=body.provider_id,
-                    model_id=body.model_id,
-                    messages=body.messages,
-                    params=body.params.model_dump(),
-                    output_text=accumulated_text if accumulated_text else None,
-                    status="error",
-                    error_type=type(e).__name__,
-                    error_message=str(e),
-                    context_prompt=body.context_prompt,
+                    body=body,
                     session_id=session_id,
+                    accumulated_text=accumulated_text,
                 )
-                raise
+                yield sse_pack(json.dumps(_stream_error_payload(normalized_error)), event="error")
+                return
 
         return StreamingResponse(
             logged_generator(),
@@ -383,21 +378,14 @@ def chat_stream_sse(body: ChatRequest):
             },
         )
     
-    except Exception as e:
-        # Log error if it happens before streaming starts
-        log_run(
+    except Exception as exc:
+        normalized_error = _log_chat_failure(
+            exc,
             trace_id=trace_id,
-            provider_key=body.provider_id,
-            model_id=body.model_id,
-            messages=body.messages,
-            params=body.params.model_dump(),
-            status="error",
-            error_type=type(e).__name__,
-            error_message=str(e),
-            context_prompt=body.context_prompt,
+            body=body,
             session_id=session_id,
         )
-        raise
+        raise normalized_error
 
 
 # ============================================

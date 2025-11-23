@@ -19,7 +19,18 @@ _models_config = _load_models_config()
 _models_lookup = {model['id']: model for model in _models_config['models']}
 
 
-def route_call(provider_id, model_id, messages, params, stream=True, stream_mode="sse", max_retries=3):
+def route_call(
+    provider_id,
+    model_id,
+    messages,
+    params,
+    stream=True,
+    stream_mode="sse",
+    max_retries=3,
+    trace_id=None,
+    session_id=None,
+    backend_endpoint=None,
+):
     """
     Route API calls to the appropriate adapter based on provider and model.
     
@@ -99,6 +110,11 @@ def route_call(provider_id, model_id, messages, params, stream=True, stream_mode
                 api_key=api_key,
                 base_url=base_url,
                 stream_mode=stream_mode,
+                provider_id=provider_id,
+                model_config_id=model_id,
+                session_id=session_id,
+                trace_id=trace_id,
+                backend_endpoint=backend_endpoint,
             ),
             max_retries=max_retries,
             base_delay=0.5,

@@ -1,5 +1,6 @@
+import json
 import openai
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 class BackendError(Exception):
     def __init__(self, message: str, status_code: int = 400):
@@ -109,3 +110,89 @@ def prettify_openai_error(err: Exception) -> str:
     if detail:
         return f"{base_msg} | Details: {detail}"
     return base_msg
+
+
+def _as_backend_error(exc: Exception) -> BackendError:
+    """Normalize arbitrary exceptions into BackendError with a useful message."""
+    if isinstance(exc, BackendError):
+        return exc
+    status_code = _get_status_code(exc)
+    if not isinstance(status_code, int) or not (400 <= status_code < 600):
+        status_code = 500
+        message = str(exc)
+    else:
+        message = prettify_openai_error(exc)
+    return BackendError(message, status_code)
+
+
+def _stream_error_payload(error: BackendError) -> Dict[str, Any]:
+    """Small helper for consistent error payloads in streaming endpoints."""
+    return {"status": error.status_code, "error": error.message}
+
+
+def _stringify_error_value(value: Any) -> str:
+    """Best-effort stringify of error payloads (dict/list/str)."""
+    if isinstance(value, dict):
+        for key in ("message", "detail", "error", "code"):
+            if key in value and value[key]:
+                return str(value[key])
+        return json.dumps(value)
+    if isinstance(value, list):
+        parts: List[str] = []
+        for entry in value:
+            if isinstance(entry, dict):
+                loc = entry.get("loc")
+                loc_str = None
+                if isinstance(loc, (list, tuple)):
+                    loc_str = " -> ".join(str(x) for x in loc)
+                msg = entry.get("msg") or entry.get("message") or entry.get("detail")
+                if loc_str and msg:
+                    parts.append(f"{loc_str}: {msg}")
+                elif msg:
+                    parts.append(str(msg))
+                else:
+                    parts.append(json.dumps(entry))
+            else:
+                parts.append(str(entry))
+        return "; ".join(parts)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _parse_error_payload(payload: Any) -> Tuple[Optional[int], Optional[str]]:
+    """Extract (status, message) from structured error payloads."""
+    if isinstance(payload, dict):
+        status = payload.get("status") or payload.get("status_code")
+        for key in ("error", "detail", "message"):
+            if key in payload and payload[key] is not None:
+                return status, _stringify_error_value(payload[key])
+        return status, None
+    if isinstance(payload, list):
+        return None, _stringify_error_value(payload)
+    if payload is None:
+        return None, None
+    return None, str(payload)
+
+
+def _parse_error_text(raw_text: str) -> Tuple[Optional[int], Optional[str]]:
+    """Parse JSON/text error bodies into (status, message)."""
+    if not raw_text:
+        return None, None
+    try:
+        payload = json.loads(raw_text)
+    except (json.JSONDecodeError, TypeError):
+        return None, raw_text
+    return _parse_error_payload(payload)
+
+
+def _format_api_error_message(status_code: Optional[int], detail: Optional[str]) -> str:
+    """Consistently format API error strings for UI surfaces."""
+    detail_str = (detail or "").strip()
+    if status_code:
+        if detail_str:
+            return f"⚠️ API error {status_code}: {detail_str}"
+        return f"⚠️ API error {status_code}"
+    if detail_str:
+        return f"⚠️ API error: {detail_str}"
+    return "⚠️ API error"

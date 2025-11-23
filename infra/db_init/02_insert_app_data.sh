@@ -651,6 +651,141 @@ VALUES (
     NULL,
     true
 )ON CONFLICT (key, version) DO NOTHING;
+
+-- 11) Movie details via OMDB tool
+INSERT INTO app.prompt_examples (
+    key, version, title, description, category, technique, tags,
+    prompt_template, variables, default_examples, response_format,
+    json_schema_template, tool_config, is_active
+)
+VALUES (
+    'movie-details-tool',
+    1,
+    'Movie details summary',
+    'Look up detailed information about a movie using the get_custom_movie_details tool (OMDB) and present a concise, user-friendly summary.',
+    'media',
+    'zero_shot',
+    ARRAY['movies', 'omdb', 'tools', 'lookup'],
+    '[
+        {
+            "role": "system",
+            "content": "You are a movie information assistant with access to a tool called get_custom_movie_details that queries the OMDB API.\\n\\nRules:\\n- When the user asks about a specific movie, you should use the tool to fetch accurate data instead of guessing.\\n- After receiving the tool result, synthesize a clear answer that covers title, year, genre, rating, short plot, and main actors.\\n- If the movie cannot be found, say that you could not find it and suggest the user to check the title or provide more details.\\n- Do not fabricate data that is not present in the tool output."
+        },
+        {
+            "role": "user",
+            "content": "Look up detailed information about the following movie and summarize it for me:\\n\\n{{movie_title}}"
+        }
+    ]'::jsonb,
+    '[
+        {
+            "name": "movie_title",
+            "type": "string",
+            "required": true,
+            "default": "",
+            "desc": "Title of the movie to look up (optionally including year, e.g. ''Inception 2010'')"
+        }
+    ]'::jsonb,
+    NULL,
+    NULL,
+    NULL,
+    '{"tool": "get_custom_movie_details"}'::jsonb,
+    true
+) ON CONFLICT (key, version) DO NOTHING;
+
+-- 12) arXiv paper search with search_arxiv tool
+INSERT INTO app.prompt_examples (
+    key, version, title, description, category, technique, tags,
+    prompt_template, variables, default_examples, response_format,
+    json_schema_template, tool_config, is_active
+)
+VALUES (
+    'arxiv-search-tool',
+    1,
+    'Search arXiv for papers',
+    'Search arXiv for academic papers on a topic using the search_arxiv tool and summarize the most relevant results.',
+    'research',
+    'zero_shot',
+    ARRAY['arxiv', 'papers', 'research', 'tools'],
+    '[
+        {
+            "role": "system",
+            "content": "You are a research assistant with access to a tool called search_arxiv that searches the arXiv repository.\\n\\nRules:\\n- Always use the search_arxiv tool when the user asks for academic papers, arXiv papers, or research on a topic.\\n- After receiving the tool result, select the most relevant papers (up to the requested limit) and summarize them clearly.\\n- For each paper, ideally include: title, main idea in 1–3 sentences, authors (shortened if the list is very long), and the year.\\n- If the user asks, provide the arXiv or PDF link from the tool output.\\n- If no relevant papers are found, say so explicitly instead of inventing papers."
+        },
+        {
+            "role": "user",
+            "content": "Search arXiv for papers related to the following topic or query, and summarize up to {{max_results}} of the most relevant ones:\\n\\n{{query}}"
+        }
+    ]'::jsonb,
+    '[
+        {
+            "name": "query",
+            "type": "string",
+            "required": true,
+            "default": "",
+            "desc": "Search query or topic for arXiv (keywords, question, or short description)"
+        },
+        {
+            "name": "max_results",
+            "type": "string",
+            "required": false,
+            "default": "5",
+            "desc": "Maximum number of papers to summarize (as a small integer in string form, e.g. ''3'', ''5'')"
+        }
+    ]'::jsonb,
+    NULL,
+    NULL,
+    NULL,
+    '{"tool": "search_arxiv"}'::jsonb,
+    true
+) ON CONFLICT (key, version) DO NOTHING;
+
+-- 13) Company fundamentals with get_fmp_company_data tool
+INSERT INTO app.prompt_examples (
+    key, version, title, description, category, technique, tags,
+    prompt_template, variables, default_examples, response_format,
+    json_schema_template, tool_config, is_active
+)
+VALUES (
+    'company-fundamentals-tool',
+    1,
+    'Company fundamentals and ratios',
+    'Fetch company profile and optional financial statements using the get_fmp_company_data tool, then summarize key fundamentals and ratios.',
+    'finance',
+    'zero_shot',
+    ARRAY['finance', 'stocks', 'fundamentals', 'tools', 'fmp'],
+    '[
+        {
+            "role": "system",
+            "content": "You are a financial analysis assistant with access to a tool called get_fmp_company_data that queries the FinancialModelingPrep API. The tool can return company profile information and, when requested, income statement and balance sheet data with derived financial metrics.\\n\\nRules:\\n- Use the tool to fetch data rather than relying on memory.\\n- If include_statements is true, highlight key metrics such as revenue, net income, margins, leverage, and any notable trends present in the tool output.\\n- Explain results in clear language suitable for a non-expert, but keep the answer concise.\\n- If the ticker is invalid or the tool returns no data, state that you could not find data for the given ticker and do not fabricate numbers.\\n- Do not make investment recommendations; only describe the data and metrics returned by the tool."
+        },
+        {
+            "role": "user",
+            "content": "Fetch company information for the following ticker using the financial data tool, with include_statements set to {{include_statements}}, and summarize the key fundamentals and metrics:\\n\\nTicker: {{ticker}}"
+        }
+    ]'::jsonb,
+    '[
+        {
+            "name": "ticker",
+            "type": "string",
+            "required": true,
+            "default": "",
+            "desc": "Public company ticker symbol (e.g. ''AAPL'', ''MSFT'')"
+        },
+        {
+            "name": "include_statements",
+            "type": "string",
+            "required": false,
+            "default": "true",
+            "desc": "Whether to request income statement and balance sheet data (''true'' or ''false'')"
+        }
+    ]'::jsonb,
+    NULL,
+    NULL,
+    NULL,
+    '{"tool": "get_fmp_company_data"}'::jsonb,
+    true
+) ON CONFLICT (key, version) DO NOTHING;
+
 EOSQL
 
 echo "[init] app data inserted."

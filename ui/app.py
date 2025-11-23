@@ -6,6 +6,7 @@ from typing import Any, Dict, Generator, List, Optional, Tuple
 
 import gradio as gr
 import httpx
+import logging
 
 from utils.load_configs import (
     _load_models,
@@ -23,6 +24,8 @@ from utils.http import resolve_api_base
 from utils.prompts_client import list_prompts, get_prompt, render_prompt
 from utils.render_formatters import format_prompt_details, format_render_preview, format_render_status
 from utils.response_schema_utils import build_schema_from_template, extract_response_format_from_prompt
+from utils.errors import _parse_error_payload, _parse_error_text, _format_api_error_message
+from utils.logger_new import setup_logging
 from services.llm_tools import get_all_tool_schemas
 
 
@@ -37,6 +40,17 @@ if DEFAULT_MODEL_ID is None:
 
 DEFAULT_API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
+UI_LOGGER_NAME = os.getenv("UI_LOGGER_NAME", "ui")
+
+# Structured JSON logger for the UI process (console only; backend handles LLM metrics).
+ui_logger = setup_logging(
+    app_logger_name=UI_LOGGER_NAME,
+    level=logging.INFO,
+    to_console=True,
+    to_file=False,
+    hijack_uvicorn=True,
+)
+
 ENDPOINTS = _load_endpoints()
 DEFAULT_ENDPOINT_KEY = _get_default_endpoint_key()
 
@@ -46,6 +60,13 @@ DELIMITER_CHOICES: List[str] = list(DELIMITER_DEFINITIONS.keys())
 
 RESPONSE_SCHEMA_TEMPLATES: Dict[str, Dict[str, Any]] = _load_response_schema_templates()
 RESPONSE_SCHEMA_CHOICES: List[str] = list(RESPONSE_SCHEMA_TEMPLATES.keys())
+
+DEFAULT_PROMPT_KEY = "bullet-summary"
+TOOL_PROMPT_KEYS = {
+    "movie-details-tool",
+    "arxiv-search-tool",
+    "company-fundamentals-tool",
+}
 
 
 def _ensure_session_state(
@@ -161,19 +182,31 @@ def _send_feedback_to_backend(
         # Debug: nothing to send if trace is missing
         # print("[feedback] skipping feedback: missing trace_id")
         return False
-
+    feedback_url = None
     try:
         api_url = resolve_api_base(api_base_url, DEFAULT_API_BASE_URL)
         feedback_url = f"{api_url.rstrip('/')}/runs/feedback"
         payload = {"trace_id": trace_id, "user_feedback": user_feedback}
-        # print(f"[feedback] posting payload={payload} to {feedback_url}")
         with httpx.Client(timeout=10.0) as client:
             response = client.post(feedback_url, json=payload)
             response.raise_for_status()
-        # print(f"[feedback] success trace_id={trace_id}")
         return True
     except Exception as exc:
-        # print(f"[feedback] failed trace_id={trace_id}: {exc}")
+        # Log frontend feedback delivery failures for observability
+        ui_logger.error(
+            "frontend_feedback_error",
+            extra={
+                "event": "frontend_feedback_error",
+                "trace_id": trace_id,
+                "session_id": None,
+                "request_type": "POST",
+                "api_endpoint": feedback_url or "unknown",
+                "backend_endpoint": "/runs/feedback",
+                "status": "error",
+                "http_status": getattr(getattr(exc, "response", None), "status_code", None),
+                "error_msg": str(exc),
+            },
+        )
         return False
 
 
@@ -445,6 +478,20 @@ def stream_chat(
                                 if "event: done" in lowered or "data: [done]" in lowered:
                                     done = True
                                     break
+                                if "event: error" in event_str:
+                                    error_status = None
+                                    error_detail = None
+                                    for line in event_str.split("\n"):
+                                        if line.startswith("data: "):
+                                            status, message = _parse_error_text(line[6:].strip())
+                                            if status is not None:
+                                                error_status = status
+                                            if message:
+                                                error_detail = message
+                                    error_msg = _format_api_error_message(error_status, error_detail)
+                                    running_history.append({"role": "assistant", "content": error_msg})
+                                    yield running_history, format_metrics_badges(metrics, ttft_ms, None), session_state_out
+                                    return
                                 if "event: metrics" in event_str:
                                     for line in event_str.split("\n"):
                                         if line.startswith("data: "):
@@ -504,6 +551,20 @@ def stream_chat(
                         if not done and sse_buffer.strip():
                             event_str = sse_buffer.strip()
                             # Process metrics events
+                            if "event: error" in event_str:
+                                error_status = None
+                                error_detail = None
+                                for line in event_str.split("\n"):
+                                    if line.startswith("data: "):
+                                        status, message = _parse_error_text(line[6:].strip())
+                                        if status is not None:
+                                            error_status = status
+                                        if message:
+                                            error_detail = message
+                                error_msg = _format_api_error_message(error_status, error_detail)
+                                running_history.append({"role": "assistant", "content": error_msg})
+                                yield running_history, format_metrics_badges(metrics, ttft_ms, None), session_state_out
+                                return
                             if "event: metrics" in event_str:
                                 for line in event_str.split("\n"):
                                     if line.startswith("data: "):
@@ -566,36 +627,37 @@ def stream_chat(
                         for chunk in response.iter_text():
                             if not chunk:
                                 continue
-                            # Check for metrics JSON
-                            if chunk.startswith("\n{") and "metrics" in chunk:
+                            json_payload = None
+                            if chunk.startswith("\n{"):
                                 try:
-                                    metrics_obj = json.loads(chunk.strip())
-                                    metrics = metrics_obj.get("metrics", metrics_obj)
-                                    # Update session_state if session_id is in metrics
+                                    json_payload = json.loads(chunk.strip())
+                                except json.JSONDecodeError:
+                                    pass
+                            if isinstance(json_payload, dict):
+                                if "error" in json_payload:
+                                    status, detail = _parse_error_payload(json_payload)
+                                    error_msg = _format_api_error_message(status, detail)
+                                    running_history.append({"role": "assistant", "content": error_msg})
+                                    yield running_history, format_metrics_badges(metrics, ttft_ms, None), session_state_out
+                                    return
+                                if "metrics" in json_payload:
+                                    metrics_obj = json_payload.get("metrics", json_payload)
+                                    metrics = metrics_obj
                                     session_state_out = _update_session_from_metrics(metrics, session_state_out)
-                                    # Attach trace_id (if present) to the main assistant message
                                     running_history = _record_trace_id_from_metrics(
                                         running_history,
                                         metrics,
                                         session_state_out,
                                     )
-                                except json.JSONDecodeError:
-                                    pass
-                                continue
-                            
-                            # Check for tool_status JSON
-                            if chunk.startswith("\n{") and "tool_status" in chunk:
-                                try:
-                                    tool_obj = json.loads(chunk.strip())
-                                    tool_msg = tool_obj.get("tool_status", "")
+                                    continue
+                                if "tool_status" in json_payload:
+                                    tool_msg = json_payload.get("tool_status", "")
                                     if tool_msg:
-                                        # Add tool execution message to history
                                         running_history.append({"role": "assistant", "content": tool_msg})
                                         yield running_history, format_metrics_badges(metrics, ttft_ms, None), session_state_out
-                                except json.JSONDecodeError:
-                                    pass
+                                    continue
                                 continue
-
+                            
                             if ttft_ms is None:
                                 ttft_ms = (time.perf_counter() - start_time) * 1000.0
 
@@ -658,6 +720,7 @@ def stream_chat(
     except httpx.HTTPStatusError as http_err:
         response = http_err.response
         detail_text = ""
+        parsed_status = None
         try:
             content_bytes = response.read()
             if content_bytes:
@@ -666,16 +729,71 @@ def stream_chat(
             detail_text = ""
         if not detail_text:
             detail_text = getattr(response, "reason_phrase", "") or str(http_err)
-        error_msg = f"⚠️ API error {response.status_code}: {detail_text}"
+        else:
+            parsed_status, parsed_detail = _parse_error_text(detail_text)
+            if parsed_detail:
+                detail_text = parsed_detail
+        status_for_display = parsed_status or response.status_code
+        error_msg = _format_api_error_message(status_for_display, detail_text)
+
+        # Structured UI log for backend HTTP errors
+        ui_logger.error(
+            "frontend_http_error",
+            extra={
+                "event": "frontend_http_error",
+                "trace_id": metrics.get("trace_id"),
+                "session_id": session_id,
+                "provider": provider_id,
+                "model_id": model_config["id"],
+                "request_type": "POST",
+                "api_endpoint": endpoint_url,
+                "backend_endpoint": endpoint_cfg["path"],
+                "http_status": status_for_display,
+                "status": "error",
+                "error_msg": detail_text,
+            },
+        )
+
         running_history.append({"role": "assistant", "content": error_msg})
         yield running_history, format_metrics_badges(metrics, ttft_ms, None), session_state_out
         return
     except httpx.HTTPError as transport_err:
+        # Transport-level issues (DNS, connect timeout, etc.) that never reach backend
+        ui_logger.error(
+            "frontend_transport_error",
+            extra={
+                "event": "frontend_transport_error",
+                "trace_id": metrics.get("trace_id"),
+                "session_id": session_id,
+                "provider": provider_id,
+                "model_id": model_config["id"],
+                "request_type": "POST",
+                "api_endpoint": endpoint_url,
+                "backend_endpoint": endpoint_cfg["path"],
+                "status": "error",
+                "error_msg": str(transport_err),
+            },
+        )
         error_msg = f"⚠️ Connection error: {transport_err}"
         running_history.append({"role": "assistant", "content": error_msg})
         yield running_history, format_metrics_badges(metrics, ttft_ms, None), session_state_out
         return
     except Exception as exc:
+        ui_logger.error(
+            "frontend_unexpected_error",
+            extra={
+                "event": "frontend_unexpected_error",
+                "trace_id": metrics.get("trace_id"),
+                "session_id": session_id,
+                "provider": provider_id,
+                "model_id": model_config["id"],
+                "request_type": "POST",
+                "api_endpoint": endpoint_url,
+                "backend_endpoint": endpoint_cfg["path"],
+                "status": "error",
+                "error_msg": str(exc),
+            },
+        )
         running_history.append({"role": "assistant", "content": f"⚠️ Unexpected error: {exc}"})
         yield running_history, format_metrics_badges(metrics, ttft_ms, None), session_state_out
         return
@@ -777,16 +895,35 @@ def fetch_prompts(api_base_url: str):
         # Create choices for dropdown: (label, prompt_id)
         # Use current schema field names (id, key) and allow technique_key for label fallback
         choices = []
+        preferred_default = None
+        fallback_default = None
         for p in prompts:
             prompt_id = p.get('id')
             prompt_key = p.get('key') or p.get('technique_key', 'unknown')
             prompt_title = p.get('title', 'Untitled')
             if prompt_id:
                 choices.append((f"{prompt_title} ({prompt_key})", str(prompt_id)))
+                str_prompt_id = str(prompt_id)
+                if preferred_default is None and prompt_key == DEFAULT_PROMPT_KEY:
+                    preferred_default = str_prompt_id
+                if fallback_default is None and prompt_key not in TOOL_PROMPT_KEYS:
+                    fallback_default = str_prompt_id
         
-        return gr.update(choices=choices, value=choices[0][1] if choices else None)
+        default_value = preferred_default or fallback_default or (choices[0][1] if choices else None)
+        return gr.update(choices=choices, value=default_value)
     except Exception as e:
         return gr.update(choices=[("Error loading prompts", None)], value=None)
+
+
+def _prompt_requires_tools(prompt: Optional[Dict[str, Any]]) -> bool:
+    """Return True if the prompt should auto-enable tool calling."""
+    if not isinstance(prompt, dict):
+        return False
+    tool_config = prompt.get("tool_config")
+    if tool_config:
+        return True
+    prompt_key = (prompt.get("key") or "").strip()
+    return prompt_key in TOOL_PROMPT_KEYS
 
 
 
@@ -857,8 +994,8 @@ def build_demo() -> gr.Blocks:
         title="Prompt Engineering Playground",
     ) as demo:
         gr.Markdown(
-            "# Prompt Engineering Playground\n"
-            "Interact with various LLM models via a lightweight Gradio UI."
+            "# 🧪 Prompt Engineering Playground\n"
+            "Experiment with API & local LLMs, tune generation, design prompts & templates, and test tool-calling — all in one place."
         )
 
         with gr.Row():
@@ -932,11 +1069,12 @@ def build_demo() -> gr.Blocks:
                         # --- Generation tab ------------------------------------
                         with gr.Tab("Generation"):
                             gr.Markdown(
-                                "Tune how the model generates output.\n\n"
-                                "- **Temperature**: controls creativity (lower is more focused, higher is more diverse).\n"
-                                "- **Top‑p (nucleus)**: limits sampling to the most probable tokens for steadier output.\n"
-                                "- **Max tokens**: caps the response length.\n"
-                                "- **Seed**: optionally set to make results more reproducible with the same inputs and parameters.\n"
+                                "### ⚙️ Generation\n"
+                                "Fine-tune how the model produces text:\n\n"
+                                "- **Temperature** – controls creativity (lower is more focused, higher is more diverse).\n"
+                                "- **Top‑p (nucleus)** – limits sampling to the most probable tokens for steadier output.\n"
+                                "- **Max tokens** – caps the response length.\n"
+                                "- **Seed** – optionally set to make results more reproducible with the same inputs and parameters.\n"
                             )
                             with gr.Row():
                                 # Initialize parameters based on default model (merge defaults with params_override)
@@ -977,10 +1115,11 @@ def build_demo() -> gr.Blocks:
                             # --- Structured output (response_format) ------------
                             with gr.Accordion("Structured output (optional)", open=False):
                                 gr.Markdown(
-                                    "Use `response_format` to force JSON output.\n\n"
-                                    "- **None**: normal text response\n"
-                                    "- **JSON object**: any valid JSON object (older option)\n"
-                                    "- **JSON schema**: enforce a specific JSON structure (recommended, newer option)"
+                                    "### 🧱 Structured output (JSON)\n"
+                                    "Use `response_format` to produce machine-readable responses:\n\n"
+                                    "- **None** – normal text response\n"
+                                    "- **JSON object** – any valid JSON object (older option)\n"
+                                    "- **JSON schema** – enforce a specific JSON structure (recommended, newer option)"
                                 )
 
                                 response_mode_dd = gr.Dropdown(
@@ -1048,8 +1187,10 @@ def build_demo() -> gr.Blocks:
                         # --- Prompting tab -------------------------------------
                         with gr.Tab("Prompting"):
                             gr.Markdown(
-                                "Use system prompt for **high-level behavior**, "
-                                "and Context to **ground answers in facts**."
+                                "### 💬 Prompting\n"
+                                "- **System prompt**: set high-level behavior, tone, or role for the assistant.\n"
+                                "- **Context**: ground answers in your facts (docs, retrieved snippets, examples).\n\n"
+                                "Use system prompt for **high-level behavior** and Context to **ground answers in facts**."
                             )
                             system_prompt_box = gr.Textbox(
                                 label="System prompt (optional)",
@@ -1071,9 +1212,11 @@ def build_demo() -> gr.Blocks:
 
                             with gr.Accordion("Delimiters (advanced)", open=False):
                                 gr.Markdown(
-                                    "Delimiters create clear **boundaries** in prompts "
-                                    "between instructions, context, and answers. "
-                                    "They help parsing and reduce prompt injection risks."
+                                    "### ✂️ Delimiters\n"
+                                    "Delimiters create clear **boundaries** in prompts between instructions, context, and answers:\n\n"
+                                    "- Help parsing structured segments.\n"
+                                    "- Reduce prompt-injection risks.\n"
+                                    "- Make templates easier to reuse across prompts.\n"
                                 )
 
                                 delim_pair_dd = gr.Dropdown(
@@ -1137,12 +1280,13 @@ def build_demo() -> gr.Blocks:
                         # --- Prompt Hub tab -------------------------------------
                         with gr.Tab("Prompt Hub"):
                             gr.Markdown(
-                                "**Prompt Hub** lets you load reusable prompt templates.\n\n"
-                                "- Select a prompt from the list.\n"
-                                "- Simple mode: fill variables in the textboxes (multiline supported).\n"
-                                "- Few-shot: if available, click 'Paste examples to Context' to add [EXAMPLES].\n"
-                                "- Click Render to preview rendered template, then Paste to send to chat.\n"
-                                "- Advanced JSON: toggle to edit the raw variables JSON directly."
+                                "### 📚 Prompt Hub\n"
+                                "Load and reuse prompt templates rendered with Jinja variables:\n\n"
+                                "- Select a prompt from the list to see its details.\n"
+                                "- **Simple mode**: fill variables in the textboxes (multiline supported).\n"
+                                "- **Few-shot**: if available, click **Paste examples to Context** to add `[EXAMPLES]`.\n"
+                                "- Click **Render Template** to preview, then **Paste template** to send to chat.\n"
+                                "- **Advanced JSON**: toggle to edit the raw variables JSON directly."
                             )
                             
                             # Maximum number of variables to support (can be increased if needed)
@@ -1464,10 +1608,11 @@ def build_demo() -> gr.Blocks:
                                     return f"⚠️ Error loading tools: {str(e)}"
                             
                             gr.Markdown(
-                                "**Tool Calling** enables the model to use external tools/functions to fetch real-time data and perform actions.\n\n"
-                                "- When enabled, the model can automatically call available tools when needed.\n"
+                                "### 🛠️ Tool Calling\n"
+                                "Enable the model to call external tools/functions for real-time data and actions:\n\n"
+                                "- When **Enable tools** is checked, the model can automatically call available tools when helpful.\n"
                                 "- Tools are supported in both streaming and non-streaming modes.\n"
-                                "- The system prompt will be enhanced to instruct the model to use tools when necessary.\n"
+                                "- The system prompt is enhanced to instruct the model to use tools when necessary.\n"
                             )
                             
                             enable_tools_ckb = gr.Checkbox(
@@ -1476,7 +1621,9 @@ def build_demo() -> gr.Blocks:
                                 elem_classes=["enhanced-ui-checkbox"],
                             )
                             
-                            gr.Markdown("**Available Tools:**")
+                            tool_prompt_override_state = gr.State(value=False)
+                            
+                            gr.Markdown("#### 🔌 Available tools")
                             
                             # Display available tools with descriptions as bullet list
                             available_tools_md = gr.Markdown(
@@ -1484,9 +1631,10 @@ def build_demo() -> gr.Blocks:
                             )
                             
                             gr.Markdown(
-                                """**Notes**: 
-                                - get_fmp_company_data tool supports income and balance sheet data for a limited number of companies. For more details, see [FMP API documentation](https://site.financialmodelingprep.com/developer/docs).""",
-                                elem_classes=["note-style"]
+                                "ℹ️ **Note**:\n"
+                                "`get_fmp_company_data` supports income and balance sheet data for a limited number of companies. "
+                                "For more details, see [FMP API documentation](https://site.financialmodelingprep.com/developer/docs).",
+                                elem_classes=["note-style"],
                             )
 
                 with gr.Row():
@@ -1545,8 +1693,8 @@ def build_demo() -> gr.Blocks:
         )
 
         # Handle tools checkbox: disable/enable endpoint dropdown, force non-streaming, and set system prompt
-        def on_tools_toggle(enable_tools: bool, current_system_prompt: str):
-            """When tools are enabled, disable endpoint dropdown, force non-streaming, and set system prompt."""
+        def on_tools_toggle(enable_tools: bool, current_system_prompt: str, allow_default_prompt: bool = True):
+            """Handle Enable tools toggle and optionally insert the default tools system prompt."""
             tools_system_prompt = (
                 "You are a helpful assistant with access to tools that can help you provide accurate and up-to-date information. "
                 "When a user asks a question that can be answered using available tools, you should use them to get the most current and accurate information. "
@@ -1554,10 +1702,9 @@ def build_demo() -> gr.Blocks:
             )
             
             if enable_tools:
-                # Allow streaming endpoint selection even with tools
                 endpoint_update = gr.update(interactive=True)
-                # Only set system prompt if it's currently empty
-                if not current_system_prompt or not current_system_prompt.strip():
+                # Only set system prompt if allowed and it's currently empty
+                if allow_default_prompt and (not current_system_prompt or not current_system_prompt.strip()):
                     system_prompt_update = gr.update(value=tools_system_prompt)
                 else:
                     # Don't overwrite existing system prompt
@@ -1567,10 +1714,47 @@ def build_demo() -> gr.Blocks:
                 # Re-enable endpoint selection, don't modify system prompt
                 return gr.update(interactive=True), gr.update()
 
+        def sync_tools_with_prompt_selection(prompt_id: str, api_base_url: str, current_system_prompt: str):
+            """Auto-enable tools for prompts that declare tool usage."""
+            if not prompt_id:
+                return gr.update(), gr.update(), gr.update(), False
+            try:
+                api_url = resolve_api_base(api_base_url, DEFAULT_API_BASE_URL)
+                prompt = get_prompt(api_url, prompt_id)
+            except Exception:
+                return gr.update(), gr.update(), gr.update(), False
+            
+            if not _prompt_requires_tools(prompt):
+                return gr.update(), gr.update(), gr.update(), False
+            
+            endpoint_update, system_prompt_update = on_tools_toggle(
+                True,
+                current_system_prompt,
+                allow_default_prompt=False,
+            )
+            return gr.update(value=True), endpoint_update, system_prompt_update, True
+
+        def handle_enable_tools_checkbox(enable_tools: bool, current_system_prompt: str, skip_default_prompt: bool):
+            """Wrapper that respects one-shot skips for the default tools system prompt."""
+            endpoint_update, system_prompt_update = on_tools_toggle(
+                enable_tools,
+                current_system_prompt,
+                allow_default_prompt=not skip_default_prompt,
+            )
+            # Always reset skip flag after applying it
+            return endpoint_update, system_prompt_update, False
+        
         enable_tools_ckb.change(
-            on_tools_toggle,
-            inputs=[enable_tools_ckb, system_prompt_box],
-            outputs=[endpoint_dropdown, system_prompt_box],
+            handle_enable_tools_checkbox,
+            inputs=[enable_tools_ckb, system_prompt_box, tool_prompt_override_state],
+            outputs=[endpoint_dropdown, system_prompt_box, tool_prompt_override_state],
+            queue=False,
+        )
+        
+        prompt_dropdown.change(
+            sync_tools_with_prompt_selection,
+            inputs=[prompt_dropdown, api_base_box, system_prompt_box],
+            outputs=[enable_tools_ckb, endpoint_dropdown, system_prompt_box, tool_prompt_override_state],
             queue=False,
         )
 
@@ -1591,5 +1775,5 @@ demo = build_demo()
 
 
 if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860, share=False)
+    demo.launch(server_name="0.0.0.0", server_port=7860, share=True)
 

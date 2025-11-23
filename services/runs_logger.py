@@ -7,6 +7,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, List, Any
 from dotenv import load_dotenv
+from utils.errors import BackendError, _as_backend_error
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models.runs import Run
@@ -109,6 +110,37 @@ def extract_context_prompt(messages: Any, max_length: int = 4000) -> Optional[st
         strip_prefix=True,
         max_length=max_length,
     )
+
+
+def _log_chat_failure(
+    exc: Exception,
+    *,
+    trace_id: str,
+    body: Any,
+    session_id: Optional[str],
+    accumulated_text: Optional[str] = None,
+) -> BackendError:
+    """
+    Normalize an exception into BackendError and log a failed chat run.
+    Shared by streaming/non-streaming chat endpoints.
+    """
+    normalized = _as_backend_error(exc)
+    log_run(
+        trace_id=trace_id,
+        provider_key=getattr(body, "provider_id", None),
+        model_id=getattr(body, "model_id", None),
+        messages=getattr(body, "messages", None),
+        params=getattr(body, "params", {}).model_dump()
+        if hasattr(getattr(body, "params", None), "model_dump")
+        else getattr(body, "params", {}),
+        output_text=accumulated_text if accumulated_text else None,
+        status="error",
+        error_type=type(exc).__name__,
+        error_message=normalized.message,
+        context_prompt=getattr(body, "context_prompt", None),
+        session_id=session_id,
+    )
+    return normalized
 
 
 def log_run(

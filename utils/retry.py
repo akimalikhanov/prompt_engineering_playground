@@ -7,7 +7,7 @@ from utils.errors import (_get_status_code, \
                     is_transient_error, \
                     prettify_openai_error, \
                     _get_retry_after_seconds)
-from utils.logging import get_correlation_id, set_correlation_id
+from utils.logger_new import get_correlation_id, set_correlation_id
 
 def compute_backoff_seconds(
     attempt: int,

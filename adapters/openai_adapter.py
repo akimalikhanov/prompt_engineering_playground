@@ -1,3 +1,4 @@
+import logging
 import os, time, json, uuid
 from typing import Generator, Optional, Literal, Union, List, Dict, Any
 from dataclasses import dataclass
@@ -7,6 +8,8 @@ import openai
 from services.llm_tools import get_tool_callable
 from utils.sse import sse_pack
 from utils.load_configs import _load_models_config
+from utils.logger_new import log_llm_call
+from utils.errors import _get_status_code
 
 
 @dataclass
@@ -190,6 +193,11 @@ def _expand_tool_calls(
 MAX_TOOL_ITERATIONS = 5
 
 
+def _build_chat_endpoint(base_url: Optional[str]) -> str:
+    base = base_url or "https://api.openai.com/v1"
+    return f"{base.rstrip('/')}/chat/completions"
+
+
 def _is_o4_model(model: str) -> bool:
     return model.startswith("o4") or "o4-mini" in model
 
@@ -257,7 +265,12 @@ def _unified_openai_api_call(
     sse_event: str = "message",
     send_done: bool = False,               # optional status event
     include_metrics: bool = True,           # add TTFT and latency to final event
-    max_retries: int = 0
+    max_retries: int = 0,
+    provider_id: Optional[str] = None,
+    model_config_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    backend_endpoint: Optional[str] = None,
 ):
     """
     Chat completion via OpenAI-compatible API (OpenAI, vLLM, etc).
@@ -308,6 +321,71 @@ def _unified_openai_api_call(
     """
 
     client = openai.OpenAI(api_key=api_key, base_url=base_url, max_retries=max_retries)
+    logger_name = os.getenv("LOGGER_NAME", "llm-router")
+    app_logger = logging.getLogger(logger_name)
+    api_endpoint = _build_chat_endpoint(base_url)
+    model_identifier = model_config_id or model
+
+    def _extra_fields(additional: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        extras: Dict[str, Any] = {
+            "stream_mode": stream_mode if stream else None,
+        }
+        if additional:
+            for key, value in additional.items():
+                if value is not None:
+                    extras[key] = value
+        return {k: v for k, v in extras.items() if v is not None}
+
+    def _emit_success(metrics_payload: Dict[str, Any], extra: Optional[Dict[str, Any]] = None):
+        merged_extra = {
+            "tokens_per_chunk": metrics_payload.get("tokens_per_chunk"),
+            "executed_tools": metrics_payload.get("executed_tools"),
+        }
+        if extra:
+            merged_extra.update({k: v for k, v in extra.items() if v is not None})
+        log_llm_call(
+            logger=app_logger,
+            trace_id=trace_id,
+            session_id=session_id,
+            provider=provider_id,
+            model_id=model_identifier,
+            request_type="POST",
+            api_endpoint=api_endpoint,
+            backend_endpoint=backend_endpoint,
+            http_status=200,
+            status="ok",
+            latency_ms=metrics_payload.get("latency_ms"),
+            ttft_ms=metrics_payload.get("ttft_ms"),
+            prompt_tokens=metrics_payload.get("prompt_tokens"),
+            completion_tokens=metrics_payload.get("completion_tokens"),
+            cost_usd=metrics_payload.get("cost_usd"),
+            extra_fields=_extra_fields(merged_extra),
+        )
+
+    def _emit_error(
+        exc: Optional[Exception] = None,
+        *,
+        message: Optional[str] = None,
+        http_status: Optional[int] = None,
+    ):
+        elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
+        error_text = message or (str(exc) if exc else None)
+        exception_type = type(exc).__name__ if exc else None
+        log_llm_call(
+            logger=app_logger,
+            trace_id=trace_id,
+            session_id=session_id,
+            provider=provider_id,
+            model_id=model_identifier,
+            request_type="POST",
+            api_endpoint=api_endpoint,
+            backend_endpoint=backend_endpoint,
+            http_status=http_status or (_get_status_code(exc) if exc else None),
+            status="error",
+            latency_ms=elapsed_ms,
+            error_msg=error_text,
+            extra_fields=_extra_fields(),
+        )
 
     normalized_messages = (
         [{"role": "user", "content": messages}] if isinstance(messages, str) else messages
@@ -387,6 +465,7 @@ def _unified_openai_api_call(
             if iteration_count >= MAX_TOOL_ITERATIONS:
                 # Emit error message and stop
                 error_msg = f"⚠️ Maximum tool call iterations ({MAX_TOOL_ITERATIONS}) reached. Stopping to prevent infinite loop."
+                _emit_error(message=error_msg)
                 if stream_mode == "raw":
                     yield "\n" + json.dumps({"error": error_msg}) + "\n"
                 else:
@@ -400,7 +479,11 @@ def _unified_openai_api_call(
             # We need to track if we are in a tool call loop
             # If tools are not enabled, this is just a single pass
             
-            response_stream = client.chat.completions.create(**local_kwargs)
+            try:
+                response_stream = client.chat.completions.create(**local_kwargs)
+            except Exception as exc:
+                _emit_error(exc)
+                raise
             
             # Buffer for accumulating tool calls
             # Map index -> {id, name, arguments}
@@ -486,6 +569,7 @@ def _unified_openai_api_call(
                 # Check for repeated identical tool calls (loop detection)
                 if _is_tool_loop(recent_tool_calls, current_tool_signatures):
                     error_msg = "⚠️ Detected infinite loop: same tool calls repeated. Stopping to prevent infinite loop."
+                    _emit_error(message=error_msg)
                     if stream_mode == "raw":
                         yield "\n" + json.dumps({"error": error_msg}) + "\n"
                     else:
@@ -647,32 +731,37 @@ def _unified_openai_api_call(
                     "total_tokens": None,
                 }
 
-                for piece, ch in _iter_text(res):
-                    # Handle ToolStatusMarker
-                    if isinstance(piece, ToolStatusMarker):
-                        for tool_name in _iter_unique_tool_names(piece.tool_names):
-                            executed_tools.add(tool_name)
-                            tool_msg = {"tool_status": f"🔧 `{tool_name}` is executed..."}
-                            yield "\n" + json.dumps(tool_msg) + "\n"
-                        continue
-                    
-                    # mark TTFT on first chunk that arrives (text or usage)
-                    if ttft is None:
-                        ttft = time.perf_counter() - t0
-                    # collect usage if/when the final usage chunk arrives
-                    try:
-                        _update_usage_totals(getattr(ch, "usage", None), usage_totals)
-                    except Exception:
-                        pass
-                    if piece:
-                        chunk_count += 1
-                        yield piece
+                try:
+                    for piece, ch in _iter_text(res):
+                        # Handle ToolStatusMarker
+                        if isinstance(piece, ToolStatusMarker):
+                            for tool_name in _iter_unique_tool_names(piece.tool_names):
+                                executed_tools.add(tool_name)
+                                tool_msg = {"tool_status": f"🔧 `{tool_name}` is executed..."}
+                                yield "\n" + json.dumps(tool_msg) + "\n"
+                            continue
+                        
+                        # mark TTFT on first chunk that arrives (text or usage)
+                        if ttft is None:
+                            ttft = time.perf_counter() - t0
+                        # collect usage if/when the final usage chunk arrives
+                        try:
+                            _update_usage_totals(getattr(ch, "usage", None), usage_totals)
+                        except Exception:
+                            pass
+                        if piece:
+                            chunk_count += 1
+                            yield piece
+                except Exception as exc:
+                    _emit_error(exc)
+                    raise
 
                 total = time.perf_counter() - t0
+                metrics_payload = _build_metrics_payload(ttft, total, chunk_count, usage_totals)
+                if executed_tools:
+                    metrics_payload["executed_tools"] = sorted(executed_tools)
+                _emit_success(metrics_payload)
                 if include_metrics:
-                    metrics_payload = _build_metrics_payload(ttft, total, chunk_count, usage_totals)
-                    if executed_tools:
-                        metrics_payload["executed_tools"] = sorted(executed_tools)
                     metrics = {"metrics": metrics_payload}
                     # emit a newline + JSON so curl clients can read it cleanly
                     yield "\n" + json.dumps(metrics) + "\n"
@@ -689,34 +778,39 @@ def _unified_openai_api_call(
                 "total_tokens": None,
             }
 
-            for piece, ch in _iter_text(res):
-                # Handle ToolStatusMarker
-                if isinstance(piece, ToolStatusMarker):
-                    for tool_name in _iter_unique_tool_names(piece.tool_names):
-                        executed_tools.add(tool_name)
-                        tool_msg = f"🔧 `{tool_name}` is executed..."
-                        yield sse_pack(tool_msg, event="tool_status")
-                    continue
-                
-                if ttft is None:
-                    ttft = time.perf_counter() - t0
-                # capture usage if present (arrives as the last/penultimate chunk)
-                try:
-                    _update_usage_totals(getattr(ch, "usage", None), usage_totals)
-                except Exception:
-                    pass
-                if piece:
-                    chunk_count += 1
-                    yield sse_pack(piece, event=sse_event)
+            try:
+                for piece, ch in _iter_text(res):
+                    # Handle ToolStatusMarker
+                    if isinstance(piece, ToolStatusMarker):
+                        for tool_name in _iter_unique_tool_names(piece.tool_names):
+                            executed_tools.add(tool_name)
+                            tool_msg = f"🔧 `{tool_name}` is executed..."
+                            yield sse_pack(tool_msg, event="tool_status")
+                        continue
+                    
+                    if ttft is None:
+                        ttft = time.perf_counter() - t0
+                    # capture usage if present (arrives as the last/penultimate chunk)
+                    try:
+                        _update_usage_totals(getattr(ch, "usage", None), usage_totals)
+                    except Exception:
+                        pass
+                    if piece:
+                        chunk_count += 1
+                        yield sse_pack(piece, event=sse_event)
+            except Exception as exc:
+                _emit_error(exc)
+                raise
 
             total = time.perf_counter() - t0
+            metrics_payload = _build_metrics_payload(ttft, total, chunk_count, usage_totals)
+            if executed_tools:
+                metrics_payload["executed_tools"] = sorted(executed_tools)
+            _emit_success(metrics_payload)
             if send_done:
                 yield sse_pack("done", event="status")
             if include_metrics:
-                payload = _build_metrics_payload(ttft, total, chunk_count, usage_totals)
-                if executed_tools:
-                    payload["executed_tools"] = sorted(executed_tools)
-                yield sse_pack(json.dumps(payload), event="metrics")
+                yield sse_pack(json.dumps(metrics_payload), event="metrics")
         return _iter_sse()
         
     # --- non-streaming path (with optional tools) ---------------------------
@@ -740,7 +834,11 @@ def _unified_openai_api_call(
 
     while iteration_count < MAX_TOOL_ITERATIONS:
         iteration_count += 1
-        res = _single_completion_call(messages_for_tools)
+        try:
+            res = _single_completion_call(messages_for_tools)
+        except Exception as exc:
+            _emit_error(exc)
+            raise
         choice = res.choices[0]
         msg = choice.message
 
@@ -871,17 +969,19 @@ def _unified_openai_api_call(
             for tool_name in executed_tools:
                 tool_messages.append(f"🔧 `{tool_name}` is executed...")
 
+        metrics_payload = {
+            "ttft_ms": None,  # not meaningful for non-streaming
+            "latency_ms": round(total * 1000, 1),
+            "model": model,
+            "prompt_tokens": prompt_tokens_total or None,
+            "completion_tokens": completion_tokens_total or None,
+            "total_tokens": total_tokens_total or None,
+            "cost_usd": cost_usd,
+            "executed_tools": executed_tools if executed_tools else None,
+        }
+        _emit_success(metrics_payload)
         return {
             "text": final_content,
-            "metrics": {
-                "ttft_ms": None,  # not meaningful for non-streaming
-                "latency_ms": round(total * 1000, 1),
-                "model": model,
-                "prompt_tokens": prompt_tokens_total or None,
-                "completion_tokens": completion_tokens_total or None,
-                "total_tokens": total_tokens_total or None,
-                "cost_usd": cost_usd,
-                "executed_tools": executed_tools if executed_tools else None,
-            },
+            "metrics": metrics_payload,
             "tool_messages": tool_messages,  # Formatted messages for UI display
         }
