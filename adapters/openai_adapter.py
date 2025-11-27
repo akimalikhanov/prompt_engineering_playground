@@ -373,6 +373,7 @@ def _unified_openai_api_call(
         exception_type = type(exc).__name__ if exc else None
         log_llm_call(
             logger=app_logger,
+            event="llm_call_failed",
             trace_id=trace_id,
             session_id=session_id,
             provider=provider_id,

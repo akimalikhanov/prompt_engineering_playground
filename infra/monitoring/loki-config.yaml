@@ -52,6 +52,23 @@ limits_config:
   allow_structured_metadata: true
   retention_period: 168h
   volume_enabled: false
-
-# you can keep your ruler/table_manager/analytics blocks as-is,
-# or drop table_manager if you want a “pure TSDB + compactor” setup
+  otlp_config:
+    resource_attributes:
+      ignore_defaults: false
+      attributes_config:
+        - action: index_label
+          attributes:
+            - service.name
+            - service.namespace
+            - deployment.environment
+    log_attributes:
+      - action: index_label
+        attributes:
+          - provider
+          - model_id
+          - event
+          - status
+          - http_status
+          - backend_endpoint
+          - level
+          - stream_mode
