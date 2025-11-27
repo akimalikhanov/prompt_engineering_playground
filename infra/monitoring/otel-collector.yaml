@@ -14,26 +14,39 @@ processors:
     send_batch_size: 512
 
 exporters:
-  logging:
+  # Replacement for the old "logging" exporter
+  debug:
     verbosity: detailed
+
+  # Tempo: unchanged, still OTLP/HTTP
   otlphttp/tempo:
     endpoint: http://tempo:4318
+
+  # NEW: send logs to Loki via OTLP HTTP
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    # optional; with plain http it's not strictly needed:
+    # tls:
+    #   insecure: true
 
 extensions:
   health_check: {}
 
 service:
   extensions: [health_check]
+
   pipelines:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [logging, otlphttp/tempo]
+      exporters: [debug, otlphttp/tempo]
+
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [logging]
+      exporters: [debug]
+
     logs:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [logging]
+      exporters: [debug, otlphttp/loki]

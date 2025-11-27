@@ -115,6 +115,14 @@ fi
 log "Bootstrapping MinIO (minio-init)"
 "${DC[@]}" run --rm minio-init
 
+# --- Start Tempo (trace backend) ---
+log "Starting Tempo"
+"${DC[@]}" up -d tempo
+
+# --- Start Loki (log backend) ---
+log "Starting Loki"
+"${DC[@]}" up -d loki
+
 # --- Start MLflow server ---
 log "Starting MLflow server"
 "${DC[@]}" up -d mlflow
@@ -152,6 +160,7 @@ MINIO_CONSOLE_PORT="$(grep -E '^MINIO_CONSOLE_PORT=' "$ENV_FILE" | tail -n1 | cu
 MLFLOW_PORT="$(grep -E '^MLFLOW_PORT=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || echo 5000)"
 GRAFANA_PORT="$(grep -E '^GRAFANA_PORT=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || echo 3000)"
 TEMPO_HTTP_PORT="$(grep -E '^TEMPO_HTTP_PORT=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || echo 3200)"
+LOKI_HTTP_PORT="$(grep -E '^LOKI_HTTP_PORT=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || echo 3100)"
 OTEL_HTTP_PORT="$(grep -E '^OTEL_HTTP_PORT=' "$ENV_FILE" | tail -n1 | cut -d= -f2- || echo 4318)"
 
 cat <<EOF
@@ -164,6 +173,7 @@ Services:
 - MinIO Console:     http://localhost:${MINIO_CONSOLE_PORT} (minioadmin/minioadmin)
 - MLflow Tracking:   http://localhost:${MLFLOW_PORT}
 - Grafana:           http://localhost:${GRAFANA_PORT} (admin/admin)
+- Loki:              http://localhost:${LOKI_HTTP_PORT}
 - Tempo:             http://localhost:${TEMPO_HTTP_PORT}
 - OTEL Collector:    http://localhost:${OTEL_HTTP_PORT} (OTLP/HTTP)
 EOF

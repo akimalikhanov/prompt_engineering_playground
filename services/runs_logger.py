@@ -13,8 +13,8 @@ from sqlalchemy.orm import sessionmaker
 from models.runs import Run
 
 # Load environment variables
-env_path = Path(__file__).parent.parent / ".env"
-load_dotenv(dotenv_path=env_path)
+# env_path = Path(__file__).parent.parent / ".env"
+load_dotenv()
 
 # Database connection
 DB_HOST = os.getenv("POSTGRES_HOST", "localhost")

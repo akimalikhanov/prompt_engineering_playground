@@ -1,0 +1,57 @@
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  log_level: info
+
+common:
+  path_prefix: /tmp/loki
+  replication_factor: 1
+
+ingester:
+  lifecycler:
+    address: 0.0.0.0
+    ring:
+      kvstore:
+        store: inmemory
+      replication_factor: 1
+  chunk_idle_period: 5m
+  chunk_retain_period: 30s
+  wal:
+    enabled: true
+    dir: /tmp/loki/wal
+
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: s3
+      schema: v13
+      index:
+        prefix: loki_index_
+        period: 24h
+
+storage_config:
+  aws:
+    bucketnames: ${LOKI_BUCKET}
+    endpoint: ${LOKI_S3_ENDPOINT}
+    s3forcepathstyle: true
+    insecure: true
+
+  tsdb_shipper:
+    active_index_directory: /tmp/loki/tsdb-index
+    cache_location: /tmp/loki/tsdb-cache
+
+compactor:
+  working_directory: /tmp/loki/compactor
+  delete_request_store: filesystem
+  retention_enabled: true
+  retention_delete_delay: 2h
+
+limits_config:
+  allow_structured_metadata: true
+  retention_period: 168h
+  volume_enabled: false
+
+# you can keep your ruler/table_manager/analytics blocks as-is,
+# or drop table_manager if you want a “pure TSDB + compactor” setup

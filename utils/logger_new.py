@@ -5,8 +5,15 @@ import uuid
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from logging.handlers import TimedRotatingFileHandler
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+from opentelemetry.sdk._logs import LoggerProvider as OtelLoggerProvider, LoggingHandler as OtelLoggingHandler
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk.resources import Resource
+
+# Hold references so the GC doesn't tear down OTEL processors
+_OTEL_RUNTIME_REFS = []
 # Correlation ID (request-scoped)
 _corr_id_var: ContextVar[str] = ContextVar("corr_id", default="-")
 
@@ -137,6 +144,54 @@ def _hijack_loggers(logger_names, level: int):
         target.handlers = []
         target.propagate = True
 
+
+def _parse_otel_headers(headers: Union[str, Dict[str, str], None]) -> Optional[Dict[str, str]]:
+    if headers is None:
+        env_headers = os.getenv("OTEL_EXPORTER_OTLP_HEADERS")
+        headers = env_headers
+    if isinstance(headers, dict):
+        return headers
+    if not headers:
+        return None
+    parsed: Dict[str, str] = {}
+    for pair in headers.split(","):
+        if not pair:
+            continue
+        if "=" not in pair:
+            continue
+        key, value = pair.split("=", 1)
+        parsed[key.strip()] = value.strip()
+    return parsed or None
+
+
+def _build_otel_handler(
+    *,
+    level: int,
+    corr_filter: logging.Filter,
+    service_name: str,
+    endpoint: Optional[str],
+    headers: Union[str, Dict[str, str], None],
+) -> Optional[logging.Handler]:
+    resolved_endpoint = endpoint or os.getenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT") or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    if not resolved_endpoint:
+        resolved_endpoint = "http://localhost:4318/v1/logs"
+    resolved_endpoint = resolved_endpoint.rstrip("/")
+    if not resolved_endpoint.endswith("/v1/logs"):
+        resolved_endpoint = f"{resolved_endpoint}/v1/logs"
+
+    header_dict = _parse_otel_headers(headers)
+
+    resource = Resource.create({"service.name": service_name})
+    provider = OtelLoggerProvider(resource=resource)
+    exporter = OTLPLogExporter(endpoint=resolved_endpoint, headers=header_dict)
+    processor = BatchLogRecordProcessor(exporter)
+    provider.add_log_record_processor(processor)
+
+    handler = OtelLoggingHandler(level=level, logger_provider=provider)
+    handler.addFilter(corr_filter)
+    _OTEL_RUNTIME_REFS.append((provider, processor, handler))
+    return handler
+
 def setup_logging(
     *,
     app_logger_name: str = "app",
@@ -147,11 +202,15 @@ def setup_logging(
     when: str = "midnight",   # Timed rotating (midnight rollover)
     backup_count: int = 7,     # keep last 7 files
     hijack_uvicorn: bool = True,
+    enable_otel: bool = False,
+    otel_endpoint: Optional[str] = None,
+    otel_headers: Union[str, Dict[str, str], None] = None,
 ) -> logging.Logger:
     """
     Idempotent logging setup. Returns the named app logger.
     - Adds correlation_id to every record via a filter.
     - Optionally hijacks Uvicorn loggers to reuse our handlers (prevents duplicates).
+    - Optionally emits logs to an OTLP/OTel collector.
     """
     # Root level (affects all unless propagate=False)
     logging.basicConfig(level=level)
@@ -179,6 +238,17 @@ def setup_logging(
         fh.setFormatter(formatter)
         fh.addFilter(corr_filter)
         _add_handler_once(logger, fh)
+
+    if enable_otel:
+        otel_handler = _build_otel_handler(
+            level=level,
+            corr_filter=corr_filter,
+            service_name=os.getenv("OTEL_SERVICE_NAME", app_logger_name),
+            endpoint=otel_endpoint,
+            headers=otel_headers,
+        )
+        if otel_handler:
+            _add_handler_once(logger, otel_handler)
 
     if hijack_uvicorn:
         # Make uvicorn/gunicorn/httpx loggers reuse our handlers & avoid double output

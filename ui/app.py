@@ -1,36 +1,51 @@
 import json
 import os
 import time
-import uuid
+from functools import partial
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
 import gradio as gr
 import httpx
 import logging
 
+from services.llm_tools import get_all_tool_schemas
+from ui.styles import BADGES_CSS, TEXTAREA_SCROLL_CSS, ENHANCED_UI_CSS, NOTE_CSS
+from utils.delimiter_utils import RESOLVER_FUNCTIONS, _delim_pair, _insert_pair_at_end, _wrap_entire_message
+from utils.errors import _parse_error_payload, _parse_error_text, _format_api_error_message
+from utils.feedback_utils import _on_like_event
+from utils.http import resolve_api_base
 from utils.load_configs import (
-    _load_models,
-    _load_endpoints,
     _get_default_endpoint_key,
     _load_delimiter_definitions,
+    _load_endpoints,
+    _load_models,
     _load_response_schema_templates,
 )
-from ui.styles import BADGES_CSS, TEXTAREA_SCROLL_CSS, ENHANCED_UI_CSS, NOTE_CSS
-from utils.ui_formatters import format_metrics_badges
-from utils.message_utils import _build_messages, _coerce_seed, _build_response_format, _normalize_selection, split_rendered_messages_for_ui
-from utils.delimiter_utils import RESOLVER_FUNCTIONS, _delim_pair, _insert_pair_at_end, _wrap_entire_message
-from utils.model_params_utils import get_effective_params_for_model, _get_model_special_behavior, _get_param_values_for_model
-from utils.http import resolve_api_base
-from utils.prompts_client import list_prompts, get_prompt, render_prompt
+from utils.logger_new import setup_logging
+from utils.message_utils import (
+    _build_messages,
+    _build_response_format,
+    _coerce_seed,
+    _normalize_selection,
+    split_rendered_messages_for_ui,
+)
+from utils.model_params_utils import (
+    _get_model_special_behavior,
+    _get_param_values_for_model,
+    get_effective_params_for_model,
+)
+from utils.prompts_client import get_prompt, list_prompts, render_prompt
 from utils.render_formatters import format_prompt_details, format_render_preview, format_render_status
 from utils.response_schema_utils import build_schema_from_template, extract_response_format_from_prompt
-from utils.errors import _parse_error_payload, _parse_error_text, _format_api_error_message
-from utils.logger_new import setup_logging
-from services.llm_tools import get_all_tool_schemas
+from utils.session_utils import (
+    INACTIVITY_TIMEOUT,
+    _ensure_session_state,
+    _record_trace_id_from_metrics,
+    _update_session_from_metrics,
+)
+from utils.ui_formatters import format_metrics_badges
 
 
-INACTIVITY_TIMEOUT = 15  # 15 minutes
-SESSION_TIMEOUT_SECONDS = INACTIVITY_TIMEOUT * 60  # 15 minutes of inactivity
 MODELS_DATA = _load_models()
 MODEL_LOOKUP = {model["id"]: model for model in MODELS_DATA["models"]}
 DEFAULT_MODEL_ID = "gemini-flash-lite" if "gemini-flash-lite" in MODEL_LOOKUP else next(iter(MODEL_LOOKUP.keys()), None)
@@ -49,6 +64,7 @@ ui_logger = setup_logging(
     to_console=True,
     to_file=False,
     hijack_uvicorn=True,
+    enable_otel=os.getenv("OTEL_LOGS_ENABLED", "").lower()=="true",
 )
 
 ENDPOINTS = _load_endpoints()
@@ -67,221 +83,6 @@ TOOL_PROMPT_KEYS = {
     "arxiv-search-tool",
     "company-fundamentals-tool",
 }
-
-
-def _ensure_session_state(
-    session_state: Optional[Dict[str, Any]],
-) -> Tuple[str, Dict[str, Any], bool, bool]:
-    """
-    Ensure there is a valid session state and enforce inactivity timeout.
-    
-    Returns:
-        session_id: active session identifier
-        new_state: updated state dict to store in gr.State
-        started_new_session: True if a new session was created (id changed or first time)
-        session_expired: True if a previous session expired (vs. first time visit)
-    """
-    now = time.time()
-    # Shallow copy so we can add new keys (like trace map) without losing existing ones.
-    state = dict(session_state) if isinstance(session_state, dict) else {}
-    session_id = state.get("session_id")
-    last_activity = state.get("last_activity")
-
-    started_new_session = False
-    session_expired = False
-
-    if (
-        not session_id
-        or not isinstance(last_activity, (int, float))
-        or (now - last_activity) > SESSION_TIMEOUT_SECONDS
-    ):
-        # Check if this is an expiration (had a previous session) vs. first time
-        if session_id and isinstance(last_activity, (int, float)):
-            # Had a previous session that expired
-            session_expired = True
-        # New or expired session -> generate fresh id
-        session_id = str(uuid.uuid4())
-        last_activity = now
-        started_new_session = True
-        # Reset custom state (e.g., trace maps) when starting new session
-        state = {}
-    else:
-        # Existing session, just bump activity time
-        last_activity = now
-
-    state["session_id"] = session_id
-    state["last_activity"] = last_activity
-    # Ensure trace map exists so we can store trace IDs per message
-    state.setdefault("trace_map", {})
-    new_state = state
-    return session_id, new_state, started_new_session, session_expired
-
-
-def _update_session_from_metrics(
-    metrics: Dict[str, Any],
-    session_state_out: Dict[str, Any],
-) -> Dict[str, Any]:
-    """
-    Update session_state from session_id (and related tracking fields) in metrics if present.
-    
-    Args:
-        metrics: Metrics dict that may contain session_id
-        session_state_out: Current session state dict
-        
-    Returns:
-        Updated session_state dict
-    """
-    if metrics.get("session_id"):
-        session_state_out["session_id"] = metrics["session_id"]
-        session_state_out["last_activity"] = time.time()
-    return session_state_out
-
-
-def _record_trace_id_from_metrics(
-    history: List[Dict[str, Any]],
-    metrics: Dict[str, Any],
-    session_state_out: Optional[Dict[str, Any]] = None,
-) -> List[Dict[str, Any]]:
-    """
-    Record the trace_id from metrics into session_state's trace_map for the latest
-    assistant message. We return history unchanged for backwards compatibility.
-    """
-    trace_id = metrics.get("trace_id")
-    if not trace_id or not history:
-        return history
-
-    # Walk backwards to find the latest assistant message that is not a tool_status line.
-    if session_state_out is None:
-        return history
-
-    trace_map = session_state_out.setdefault("trace_map", {})
-    
-    for idx in range(len(history) - 1, -1, -1):
-        msg = history[idx]
-        if msg.get("role") != "assistant":
-            continue
-        content = str(msg.get("content", ""))
-        if content.startswith("🔧"):
-            continue
-        trace_map[idx] = trace_id
-        break
-
-    return history
-
-
-def _send_feedback_to_backend(
-    trace_id: Optional[str],
-    user_feedback: int,
-    api_base_url: Optional[str],
-) -> bool:
-    """
-    POST feedback to the backend feedback endpoint.
-    Returns True if request succeeded, False otherwise.
-    """
-    if not trace_id:
-        # Debug: nothing to send if trace is missing
-        # print("[feedback] skipping feedback: missing trace_id")
-        return False
-    feedback_url = None
-    try:
-        api_url = resolve_api_base(api_base_url, DEFAULT_API_BASE_URL)
-        feedback_url = f"{api_url.rstrip('/')}/runs/feedback"
-        payload = {"trace_id": trace_id, "user_feedback": user_feedback}
-        with httpx.Client(timeout=10.0) as client:
-            response = client.post(feedback_url, json=payload)
-            response.raise_for_status()
-        return True
-    except Exception as exc:
-        # Log frontend feedback delivery failures for observability
-        ui_logger.error(
-            "frontend_feedback_error",
-            extra={
-                "event": "frontend_feedback_error",
-                "trace_id": trace_id,
-                "session_id": None,
-                "request_type": "POST",
-                "api_endpoint": feedback_url or "unknown",
-                "backend_endpoint": "/runs/feedback",
-                "status": "error",
-                "http_status": getattr(getattr(exc, "response", None), "status_code", None),
-                "error_msg": str(exc),
-            },
-        )
-        return False
-
-
-def _apply_feedback_to_message(
-    history: List[Dict[str, Any]],
-    index: Optional[int],
-    liked_state: Optional[bool],
-) -> List[Dict[str, Any]]:
-    """
-    Apply user_feedback to a specific assistant message (by index) in the chat history.
-    This only updates local UI state; backend persistence will be handled separately.
-    """
-    if not history:
-        return history
-    if index is None or index < 0 or index >= len(history):
-        return history
-
-    msg = history[index] or {}
-    if msg.get("role") != "assistant":
-        return history
-
-    content = str(msg.get("content", ""))
-    if content.startswith("🔧"):
-        # Skip tool status messages
-        return history
-
-    # Map liked_state to feedback value only; do not modify displayed content.
-    # True=1, False=-1, None=0 (cleared)
-    if liked_state is True:
-        feedback_value = 1
-    elif liked_state is False:
-        feedback_value = -1
-    else:
-        feedback_value = 0
-
-    msg["user_feedback"] = feedback_value
-
-    return history
-
-
-def _on_like_event(
-    evt: "gr.LikeData",
-    history: List[Dict[str, Any]],
-    api_base_url: Optional[str],
-    session_state: Optional[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    """
-    Gradio Chatbot.like callback.
-    evt.liked:
-      - True  -> thumbs up
-      - False -> thumbs down
-      - None  -> reaction cleared
-    """
-    history = history or []
-    index = getattr(evt, "index", None)
-    liked_state = getattr(evt, "liked", None)
-
-    history = _apply_feedback_to_message(history, index, liked_state)
-
-    # After updating local UI, send feedback upstream if we know the trace_id.
-    user_feedback = 0
-    if (
-        index is not None
-        and 0 <= index < len(history)
-        and isinstance(history[index], dict)
-    ):
-        user_feedback = history[index].get("user_feedback", 0)
-
-    trace_id = None
-    if isinstance(session_state, dict):
-        trace_map = session_state.get("trace_map") or {}
-        trace_id = trace_map.get(index)
-
-    _send_feedback_to_backend(trace_id, user_feedback, api_base_url)
-    return history
 
 
 def stream_chat(
@@ -1059,7 +860,11 @@ def build_demo() -> gr.Blocks:
                         )
                         # Wire the chatbot like/dislike control now that we know API base input.
                         chatbot.like(
-                            _on_like_event,
+                            partial(
+                                _on_like_event,
+                                default_api_base_url=DEFAULT_API_BASE_URL,
+                                logger=ui_logger,
+                            ),
                             inputs=[chatbot, api_base_box, session_state],
                             outputs=[chatbot],
                         )

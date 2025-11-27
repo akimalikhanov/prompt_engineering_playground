@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, HTTPException, Query, Response, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -34,13 +37,14 @@ from services.prompts_service import (
 )
 from utils.logger_new import setup_logging, correlation_id_middleware, get_correlation_id
 from utils.jinja_renderer import render_messages
-from dotenv import load_dotenv
+
 import os
 import mlflow
 import json
 import logging
 
-load_dotenv()
+
+service_name = os.getenv("OTEL_SERVICE_NAME", "pep-api")
 
 # Ensure MLflow traces are exported both to MLflow Tracking and via OTLP to the collector
 os.environ.setdefault("MLFLOW_TRACE_ENABLE_OTLP_DUAL_EXPORT", "true")
@@ -53,8 +57,8 @@ os.environ.setdefault("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "http/protobuf")
 os.environ.setdefault("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://localhost:4318/v1/traces")
 
 # Service identity
-os.environ.setdefault("OTEL_RESOURCE_ATTRIBUTES", "service.name=pep-api,service.namespace=pep,deployment.environment=prod")
-os.environ.setdefault("OTEL_SERVICE_NAME", "pep-api")
+os.environ.setdefault("OTEL_RESOURCE_ATTRIBUTES", f"service.name={service_name},service.namespace=pep,deployment.environment=prod")
+os.environ.setdefault("OTEL_SERVICE_NAME", service_name)
 
 # Reduce MLflow trace verbosity to prevent oversized traces
 os.environ.setdefault("MLFLOW_TRACE_LOG_INPUTS_OUTPUTS", "false")
@@ -85,6 +89,7 @@ logger = setup_logging(
     to_file=False,
     # file_path="logs/app.log", # stored locally in ./logs
     hijack_uvicorn=True,      # <- key to avoid duplicate uvicorn+app logs
+    enable_otel=os.getenv("OTEL_LOGS_ENABLED", "").lower() == "true",
 )
 
 app.middleware("http")(correlation_id_middleware)

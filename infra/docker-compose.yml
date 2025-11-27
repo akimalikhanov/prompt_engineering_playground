@@ -84,13 +84,14 @@ services:
     restart: unless-stopped
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.103.0
+    image: otel/opentelemetry-collector-contrib:0.140.1
     container_name: otel-collector
     command: ["--config=/etc/otelcol/otel-collector.yaml"]
     volumes:
       - ./monitoring/otel-collector.yaml:/etc/otelcol/otel-collector.yaml:ro
     depends_on:
       - tempo
+      - loki
     ports:
       - "${OTEL_HTTP_PORT:-4318}:4318"     # OTLP/HTTP
       - "${OTEL_HEALTH_PORT:-13133}:13133"   # health check
@@ -120,6 +121,30 @@ services:
       - "${TEMPO_MEMBERLIST_PORT:-7946}:7946"   # memberlist port
     restart: unless-stopped
 
+  loki:
+    image: grafana/loki:3.5.7
+    container_name: loki
+    command:
+      - -config.file=/etc/loki/loki-config.yaml
+      - -config.expand-env=true
+    env_file: ../.env
+    environment:
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      LOKI_BUCKET: ${LOKI_BUCKET:-loki-logs}
+      LOKI_S3_ENDPOINT: ${LOKI_S3_ENDPOINT:-minio:9000}
+    depends_on:
+      minio:
+        condition: service_started
+    user: "0"  # run as root to ensure write access to named volume (see loki-config paths)
+    volumes:
+      - ./monitoring/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki-data:/tmp/loki   # named volume for WAL, cache, compactor data (matches loki-config.yaml)
+    ports:
+      - "${LOKI_HTTP_PORT:-3100}:3100"   # Loki HTTP API
+    restart: unless-stopped
+
   grafana:
     image: grafana/grafana:latest
     container_name: grafana
@@ -137,8 +162,10 @@ services:
     restart: unless-stopped
     depends_on:
       - tempo
+      - loki
 
     
 volumes:
   tempo-data:
   grafana-data:
+  loki-data:
