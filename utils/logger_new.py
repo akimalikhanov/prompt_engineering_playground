@@ -10,7 +10,8 @@ from typing import Any, Dict, Optional, Union
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider as OtelLoggerProvider, LoggingHandler as OtelLoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-from opentelemetry.sdk.resources import Resource
+
+from utils.otel_config import get_otel_resource, get_otlp_logs_endpoint
 
 # Hold references so the GC doesn't tear down OTEL processors
 _OTEL_RUNTIME_REFS = []
@@ -168,21 +169,16 @@ def _build_otel_handler(
     *,
     level: int,
     corr_filter: logging.Filter,
-    service_name: str,
     endpoint: Optional[str],
     headers: Union[str, Dict[str, str], None],
 ) -> Optional[logging.Handler]:
-    resolved_endpoint = endpoint or os.getenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT") or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
-    if not resolved_endpoint:
-        resolved_endpoint = "http://localhost:4318/v1/logs"
-    resolved_endpoint = resolved_endpoint.rstrip("/")
-    if not resolved_endpoint.endswith("/v1/logs"):
-        resolved_endpoint = f"{resolved_endpoint}/v1/logs"
+    # Use unified OTEL config for endpoint and resource
+    resolved_endpoint = endpoint or get_otlp_logs_endpoint()
 
     header_dict = _parse_otel_headers(headers)
 
-    resource = Resource.create({"service.name": service_name})
-    provider = OtelLoggerProvider(resource=resource)
+    # Use shared resource for consistent service identity across logs/metrics/traces
+    provider = OtelLoggerProvider(resource=get_otel_resource())
     exporter = OTLPLogExporter(endpoint=resolved_endpoint, headers=header_dict)
     processor = BatchLogRecordProcessor(exporter)
     provider.add_log_record_processor(processor)
@@ -243,7 +239,6 @@ def setup_logging(
         otel_handler = _build_otel_handler(
             level=level,
             corr_filter=corr_filter,
-            service_name=os.getenv("OTEL_SERVICE_NAME", app_logger_name),
             endpoint=otel_endpoint,
             headers=otel_headers,
         )

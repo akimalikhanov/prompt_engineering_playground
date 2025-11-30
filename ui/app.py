@@ -83,6 +83,9 @@ TOOL_PROMPT_KEYS = {
     "arxiv-search-tool",
     "company-fundamentals-tool",
 }
+STATEMENTS_VARIABLE = "statements"
+STATEMENT_OPTIONS = ["income", "balance"]
+STATEMENT_OPTION_SET = set(STATEMENT_OPTIONS)
 
 
 def stream_chat(
@@ -191,6 +194,10 @@ def stream_chat(
         return
 
     provider_id = model_config["provider"]
+    provider_key = provider_id.lower() if isinstance(provider_id, str) else provider_id
+    # Gemini (Google) does not support tool calling and structured output simultaneously
+    disable_structured_output = enable_tools and provider_key == "google"
+
     payload_messages = _build_messages(user_message, sanitized_history, system_prompt, context_prompt)
 
     api_url = (api_base_url or DEFAULT_API_BASE_URL).strip()
@@ -208,18 +215,13 @@ def stream_chat(
     if seed_value is not None:
         params["seed"] = seed_value
 
-    # Handle response_format
+    # Handle response_format (skip for Gemini when tools are enabled)
     schema_template_label = _normalize_selection(schema_template) if schema_template else None
-    response_format = _build_response_format(response_mode, strict_schema, schema_code, schema_template_label, RESPONSE_SCHEMA_TEMPLATES)
+    response_format = None
+    if not disable_structured_output:
+        response_format = _build_response_format(response_mode, strict_schema, schema_code, schema_template_label, RESPONSE_SCHEMA_TEMPLATES)
     if response_format is not None:
         params["response_format"] = response_format
-        # Debug: log what we're sending
-        # print(f"DEBUG: Adding response_format to params: {json.dumps(response_format, indent=2)}")
-        pass
-    else:
-        # Debug: log why response_format is None
-        # print(f"DEBUG: response_format is None (mode={response_mode}, schema_code={'present' if schema_code else 'None'})")
-        pass
 
     # Handle tools if enabled
     if enable_tools:
@@ -727,6 +729,49 @@ def _prompt_requires_tools(prompt: Optional[Dict[str, Any]]) -> bool:
     return prompt_key in TOOL_PROMPT_KEYS
 
 
+def _default_statements_selection(default_value: Optional[Any]) -> List[str]:
+    """Return checkbox defaults for the statements selector based on template defaults."""
+    if default_value is None or default_value == "":
+        return STATEMENT_OPTIONS.copy()
+    if isinstance(default_value, bool):
+        return STATEMENT_OPTIONS.copy() if default_value else []
+    if isinstance(default_value, (int, float)):
+        return STATEMENT_OPTIONS.copy() if default_value else []
+    if isinstance(default_value, (list, tuple, set)):
+        return _normalize_statements_selection(list(default_value))
+    if isinstance(default_value, str):
+        stripped = default_value.strip()
+        if not stripped:
+            return []
+        try:
+            parsed = json.loads(stripped)
+            if isinstance(parsed, list):
+                return _normalize_statements_selection(parsed)
+        except json.JSONDecodeError:
+            pass
+        parts = [part.strip() for part in stripped.split(",")]
+        return _normalize_statements_selection([part for part in parts if part])
+    return []
+
+
+def _normalize_statements_selection(selection: Any) -> List[str]:
+    """Normalize checkbox selections (list/str) into canonical lowercase values."""
+    if selection is None:
+        return []
+    if isinstance(selection, str):
+        candidates = [selection]
+    elif isinstance(selection, (list, tuple, set)):
+        candidates = selection
+    else:
+        return []
+    normalized: List[str] = []
+    for candidate in candidates:
+        value = str(candidate).strip().lower()
+        if value in STATEMENT_OPTION_SET and value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
 
 def paste_template_to_input(rendered_json: str, prompt_id: str = None, api_base_url: str = None):
     """Parse the rendered JSON and distribute messages to appropriate fields.
@@ -859,12 +904,25 @@ def build_demo() -> gr.Blocks:
                             elem_classes=["scroll-text"],
                         )
                         # Wire the chatbot like/dislike control now that we know API base input.
-                        chatbot.like(
-                            partial(
-                                _on_like_event,
+                        # NOTE: In Gradio 5.x, inputs come first, then gr.LikeData is
+                        # auto-injected based on the type hint (not position).
+                        def _like_handler(
+                            history: List[Dict[str, Any]],
+                            api_base_url: Optional[str],
+                            session: Optional[Dict[str, Any]],
+                            evt: gr.LikeData,
+                        ) -> List[Dict[str, Any]]:
+                            return _on_like_event(
+                                evt,
+                                history,
+                                api_base_url,
+                                session,
                                 default_api_base_url=DEFAULT_API_BASE_URL,
                                 logger=ui_logger,
-                            ),
+                            )
+
+                        chatbot.like(
+                            _like_handler,
                             inputs=[chatbot, api_base_box, session_state],
                             outputs=[chatbot],
                         )
@@ -1137,6 +1195,13 @@ def build_demo() -> gr.Blocks:
                                         visible=False,
                                         elem_classes=["scroll-text"]
                                     ))
+                                statements_selector = gr.CheckboxGroup(
+                                    label="Financial statements to include",
+                                    choices=STATEMENT_OPTIONS,
+                                    value=[],
+                                    visible=False,
+                                    info="Choose which statements get_fmp_company_data should request (income, balance). Leave empty for profile only.",
+                                )
                             
                             with gr.Row():
                                 render_btn = gr.Button(
@@ -1191,6 +1256,7 @@ def build_demo() -> gr.Blocks:
                                             gr.update(value=""),
                                             gr.update(visible=False, label=f"var_{i+1}", value="")
                                         ])
+                                    reset_updates.append(gr.update(visible=False, value=[]))  # statements selector
                                     reset_updates.append(gr.update(visible=False))  # paste_examples_btn visibility
                                     return tuple(reset_updates)
                                 
@@ -1212,13 +1278,27 @@ def build_demo() -> gr.Blocks:
                                     # Build variable fields strictly from template variables
                                     variables = prompt.get("variables", []) or []
                                     num_vars = len(variables)
+                                    statements_default_value: Optional[Any] = None
+                                    statements_field_present = False
                                     
                                     # Helper to build updates for one slot
                                     def slot_updates(var_def):
+                                        nonlocal statements_default_value, statements_field_present
                                         if var_def:
                                             label = var_def.get("name") or "variable"
                                             default_val = var_def.get("default", "")
-                                            return gr.update(value=label), gr.update(visible=True, label=label, value=default_val)
+                                            hide_statements_flag = (label == STATEMENTS_VARIABLE)
+                                            if hide_statements_flag:
+                                                statements_field_present = True
+                                                statements_default_value = default_val
+                                            return (
+                                                gr.update(value=label),
+                                                gr.update(
+                                                    visible=not hide_statements_flag,
+                                                    label=label,
+                                                    value=default_val,
+                                                ),
+                                            )
                                         else:
                                             return gr.update(value=""), gr.update(visible=False, label="var", value="")
                                     
@@ -1234,6 +1314,12 @@ def build_demo() -> gr.Blocks:
                                         var_def = variables[i] if i < num_vars else None
                                         updates.extend(slot_updates(var_def))
                                     
+                                    statements_visible = statements_field_present
+                                    statements_default = (
+                                        _default_statements_selection(statements_default_value)
+                                        if statements_visible else []
+                                    )
+                                    updates.append(gr.update(visible=statements_visible, value=statements_default))
                                     updates.append(gr.update(visible=show_examples_btn))
                                     return tuple(updates)
                                 except Exception as e:
@@ -1249,6 +1335,7 @@ def build_demo() -> gr.Blocks:
                                             gr.update(value=""),
                                             gr.update(visible=False, label=f"var_{i+1}", value="")
                                         ])
+                                    error_updates.append(gr.update(visible=False, value=[]))
                                     error_updates.append(gr.update(visible=False))
                                     return tuple(error_updates)
                             
@@ -1268,9 +1355,20 @@ def build_demo() -> gr.Blocks:
                             ):
                                 """Render, building variables from simple fields if not advanced."""
                                 try:
-                                    # Last argument is api_base_url, rest are variable name/value pairs
-                                    api_base_url = var_inputs_and_api[-1] if var_inputs_and_api else DEFAULT_API_BASE_URL
-                                    var_inputs = var_inputs_and_api[:-1]  # All except the last one
+                                    # Last arguments: statements selector value, api_base_url
+                                    api_base_url = DEFAULT_API_BASE_URL
+                                    statements_selection_raw: Any = []
+                                    var_inputs = var_inputs_and_api
+                                    if var_inputs_and_api:
+                                        api_base_url = var_inputs_and_api[-1]
+                                        var_inputs = var_inputs_and_api[:-1]
+                                    if var_inputs:
+                                        statements_selection_raw = var_inputs[-1]
+                                        var_inputs = var_inputs[:-1]
+                                    statements_selection = (
+                                        _normalize_statements_selection(statements_selection_raw)
+                                        if not is_advanced else []
+                                    )
                                     
                                     api_url = resolve_api_base(api_base_url, DEFAULT_API_BASE_URL)
                                     if is_advanced:
@@ -1290,6 +1388,10 @@ def build_demo() -> gr.Blocks:
                                             var_value = var_inputs[i * 2 + 1] if i * 2 + 1 < len(var_inputs) else ""
                                             if (var_name or "").strip():
                                                 variables[var_name.strip()] = var_value if var_value is not None else ""
+                                    statements_enabled = False
+                                    if not is_advanced and STATEMENTS_VARIABLE in variables:
+                                        statements_enabled = True
+                                        variables[STATEMENTS_VARIABLE] = statements_selection
                                     # Call API
                                     data = render_prompt(api_url, prompt_id, variables)
                                     rendered_messages = data.get("rendered_messages", [])
@@ -1343,6 +1445,7 @@ def build_demo() -> gr.Blocks:
                             # Add all variable textbox pairs
                             for i in range(MAX_VARIABLES):
                                 prompt_outputs.extend([var_name_hidden_list[i], var_value_tb_list[i]])
+                            prompt_outputs.append(statements_selector)
                             prompt_outputs.append(paste_examples_btn)
                             
                             prompt_dropdown.change(
@@ -1369,6 +1472,7 @@ def build_demo() -> gr.Blocks:
                             # Add all variable name/value pairs
                             for i in range(MAX_VARIABLES):
                                 render_inputs.extend([var_name_hidden_list[i], var_value_tb_list[i]])
+                            render_inputs.append(statements_selector)
                             render_inputs.append(api_base_box)
                             
                             render_btn.click(
@@ -1436,9 +1540,12 @@ def build_demo() -> gr.Blocks:
                             )
                             
                             gr.Markdown(
-                                "ℹ️ **Note**:\n"
-                                "`get_fmp_company_data` supports income and balance sheet data for a limited number of companies. "
-                                "For more details, see [FMP API documentation](https://site.financialmodelingprep.com/developer/docs).",
+                                "ℹ️ **Notes:**\n"
+                                '''
+                                - `get_fmp_company_data` supports income and balance sheet data for a limited number of companies. For more details, see [FMP API documentation](https://site.financialmodelingprep.com/developer/docs).
+                                - Gemini does not currently support using tool calling and structured output in the same request. (see [issue](https://github.com/llm-router/llm-router/issues/706)). To avoid errors, the system automatically switches the response format to plain text when Gemini + tools are both enabled. 
+                                If you need structured output + tools, consider either using OpenAI models or making two calls (tools → text, then text→ structured output).
+                                ''',
                                 elem_classes=["note-style"],
                             )
 

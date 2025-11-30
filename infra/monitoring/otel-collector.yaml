@@ -17,6 +17,14 @@ exporters:
   debug:
     verbosity: detailed
 
+  prometheus:
+    endpoint: 0.0.0.0:9464
+    # Include service.instance.id in metric labels to differentiate workers
+    resource_to_telemetry_conversion:
+      enabled: true
+    # Ensure counters are exported as cumulative (not delta)
+    # This is the default but being explicit for clarity
+
   otlphttp/tempo:
     endpoint: http://tempo:4318
 
@@ -38,7 +46,7 @@ service:
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, batch]
-      exporters: [debug]
+      exporters: [debug, prometheus]
 
     logs:
       receivers: [otlp]

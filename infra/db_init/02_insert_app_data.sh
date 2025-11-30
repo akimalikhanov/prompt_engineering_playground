@@ -753,38 +753,51 @@ VALUES (
     'finance',
     'zero_shot',
     ARRAY['finance', 'stocks', 'fundamentals', 'tools', 'fmp'],
-    '[
+
+    -- prompt_template (JSONB)
+    $$[
         {
             "role": "system",
-            "content": "You are a financial analysis assistant with access to a tool called get_fmp_company_data that queries the FinancialModelingPrep API. The tool can return company profile information and, when requested, income statement and balance sheet data with derived financial metrics.\\n\\nRules:\\n- Use the tool to fetch data rather than relying on memory.\\n- If include_statements is true, highlight key metrics such as revenue, net income, margins, leverage, and any notable trends present in the tool output.\\n- Explain results in clear language suitable for a non-expert, but keep the answer concise.\\n- If the ticker is invalid or the tool returns no data, state that you could not find data for the given ticker and do not fabricate numbers.\\n- Do not make investment recommendations; only describe the data and metrics returned by the tool."
+            "content": "You are a financial analysis assistant with access to a tool called get_fmp_company_data that queries the FinancialModelingPrep API. The tool can return company profile information and, when requested, income statement and balance sheet data with derived financial metrics.\n\nRules:\n- Use the tool to fetch data rather than relying on memory.\n- If financial statements are requested (statements list is not empty), highlight key metrics such as revenue, net income, margins, leverage, and any notable trends present in the tool output.\n- Explain results in clear language suitable for a non-expert, but keep the answer concise.\n- If the ticker is invalid or the tool returns no data, state that you could not find data for the given ticker and do not fabricate numbers.\n- Do not make investment recommendations; only describe the data and metrics returned by the tool."
         },
         {
             "role": "user",
-            "content": "Fetch company information for the following ticker using the financial data tool, with include_statements set to {{include_statements}}, and summarize the key fundamentals and metrics:\\n\\nTicker: {{ticker}}"
+            "content": "{% set statements_summary = statements | join(', ') if statements else 'profile only' %}\nFetch company information for the following ticker using the financial data tool. Use the statements argument exactly as provided to decide whether to include financial statements when calling get_fmp_company_data, and summarize the key fundamentals and metrics:\n\nTicker: {{ticker}}\nStatements argument to use: {{ statements if statements else [] }}\nStatements requested: {{ statements_summary }}"
         }
-    ]'::jsonb,
-    '[
+    ]$$::jsonb,
+
+    -- variables (JSONB)
+    $$[
         {
             "name": "ticker",
             "type": "string",
             "required": true,
             "default": "",
-            "desc": "Public company ticker symbol (e.g. ''AAPL'', ''MSFT'')"
+            "desc": "Public company ticker symbol (e.g. 'AAPL', 'MSFT')"
         },
         {
-            "name": "include_statements",
+            "name": "statements",
             "type": "string",
             "required": false,
-            "default": "true",
-            "desc": "Whether to request income statement and balance sheet data (''true'' or ''false'')"
+            "default": "income,balance",
+            "desc": "Comma-separated list of statements to include (options: 'income', 'balance'). Leave blank for profile only."
         }
-    ]'::jsonb,
+    ]$$::jsonb,
+
+    -- default_examples, response_format, json_schema_template
     NULL,
     NULL,
     NULL,
-    '{"tool": "get_fmp_company_data"}'::jsonb,
+
+    -- tool_config (JSONB)
+    $${
+        "tool": "get_fmp_company_data"
+    }$$::jsonb,
+
     true
-) ON CONFLICT (key, version) DO NOTHING;
+)
+ON CONFLICT (key, version) DO NOTHING;
+
 
 EOSQL
 

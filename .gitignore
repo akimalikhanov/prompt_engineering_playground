@@ -10,7 +10,8 @@ wheels/
 .venv
 
 # Folders
-storage/
+storage/*
+!storage/.gitkeep
 
 # Mics
 .env

@@ -95,6 +95,7 @@ services:
     ports:
       - "${OTEL_HTTP_PORT:-4318}:4318"     # OTLP/HTTP
       - "${OTEL_HEALTH_PORT:-13133}:13133"   # health check
+      - "${OTEL_PROM_METRICS_PORT:-9464}:9464" # Prometheus scrape endpoint
     restart: unless-stopped
     # Note: Healthcheck removed as this minimal image lacks shell/curl/wget
     # Service health can be verified via: curl http://localhost:13133/
@@ -164,8 +165,24 @@ services:
       - tempo
       - loki
 
-    
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    container_name: prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus   # persistent TSDB storage
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-admin-api
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    restart: unless-stopped
+    depends_on:
+      - otel-collector
+
 volumes:
   tempo-data:
   grafana-data:
   loki-data:
+  prometheus-data:

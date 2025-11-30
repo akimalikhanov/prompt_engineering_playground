@@ -1,6 +1,10 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+# Configure OTEL env vars early, before importing libraries that auto-configure from them
+from utils.otel_config import configure_otel_env_vars, get_service_name
+configure_otel_env_vars()
+
 from fastapi import FastAPI, HTTPException, Query, Response, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -44,21 +48,10 @@ import json
 import logging
 
 
-service_name = os.getenv("OTEL_SERVICE_NAME", "pep-api")
+service_name = get_service_name()
 
 # Ensure MLflow traces are exported both to MLflow Tracking and via OTLP to the collector
 os.environ.setdefault("MLFLOW_TRACE_ENABLE_OTLP_DUAL_EXPORT", "true")
-
-# Standardize OTLP settings for libraries that read either generic or traces-specific vars
-os.environ.setdefault("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
-os.environ.setdefault("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL", "http/protobuf")
-
-# Send OTLP to local collector (exposed by docker-compose on host port 4318)
-os.environ.setdefault("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://localhost:4318/v1/traces")
-
-# Service identity
-os.environ.setdefault("OTEL_RESOURCE_ATTRIBUTES", f"service.name={service_name},service.namespace=pep,deployment.environment=prod")
-os.environ.setdefault("OTEL_SERVICE_NAME", service_name)
 
 # Reduce MLflow trace verbosity to prevent oversized traces
 os.environ.setdefault("MLFLOW_TRACE_LOG_INPUTS_OUTPUTS", "false")

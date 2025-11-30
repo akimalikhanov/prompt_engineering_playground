@@ -13,6 +13,14 @@ datasources:
       maxLines: 1000
       timeout: 60
 
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: false
+    editable: false
+
   - name: Tempo
     uid: tempo
     type: tempo

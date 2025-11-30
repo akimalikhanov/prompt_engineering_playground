@@ -10,6 +10,7 @@ from utils.sse import sse_pack
 from utils.load_configs import _load_models_config
 from utils.logger_new import log_llm_call
 from utils.errors import _get_status_code
+from utils.otel_metrics import record_llm_request
 
 
 @dataclass
@@ -361,6 +362,13 @@ def _unified_openai_api_call(
             cost_usd=metrics_payload.get("cost_usd"),
             extra_fields=_extra_fields(merged_extra),
         )
+        # Record OTEL metric
+        record_llm_request(
+            provider=provider_id,
+            model_id=model_identifier,
+            status="ok",
+            endpoint=backend_endpoint,
+        )
 
     def _emit_error(
         exc: Optional[Exception] = None,
@@ -386,6 +394,13 @@ def _unified_openai_api_call(
             latency_ms=elapsed_ms,
             error_msg=error_text,
             extra_fields=_extra_fields(),
+        )
+        # Record OTEL metric
+        record_llm_request(
+            provider=provider_id,
+            model_id=model_identifier,
+            status="error",
+            endpoint=backend_endpoint,
         )
 
     normalized_messages = (
