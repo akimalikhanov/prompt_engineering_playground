@@ -104,6 +104,7 @@ services:
     image: grafana/tempo:2.8.2
     container_name: tempo
     command: ["-config.file=/etc/tempo/tempo.yaml"]
+    user: "0"  # run as root to ensure write access to named volume (/tmp/tempo)
     depends_on:
       - minio
     env_file: ../.env

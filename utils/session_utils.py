@@ -1,9 +1,9 @@
 import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
+import os
 
-
-INACTIVITY_TIMEOUT = 15  # minutes
+INACTIVITY_TIMEOUT = int(os.getenv("INACTIVITY_TIMEOUT", 15))  # minutes
 SESSION_TIMEOUT_SECONDS = INACTIVITY_TIMEOUT * 60
 
 

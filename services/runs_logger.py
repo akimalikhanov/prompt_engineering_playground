@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Optional, Dict, List, Any
 from dotenv import load_dotenv
 from utils.errors import BackendError, _as_backend_error
+from utils.otel_metrics import record_runs_feedback
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models.runs import Run
@@ -385,6 +386,14 @@ def update_run_feedback_by_trace_id(trace_id: str, user_feedback: int) -> bool:
 
         run.user_feedback = user_feedback
         session.commit()
+        
+        # Record feedback metric
+        record_runs_feedback(
+            model_id=run.model_id,
+            provider=run.provider_key,
+            feedback=user_feedback,
+        )
+        
         return True
     except Exception as e:
         session.rollback()

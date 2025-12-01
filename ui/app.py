@@ -274,7 +274,7 @@ def stream_chat(
                             sse_buffer += chunk.decode("utf-8")
                             while "\n\n" in sse_buffer and not done:
                                 event, sse_buffer = sse_buffer.split("\n\n", 1)
-                                event_str = event.strip()
+                                event_str = event.lstrip()  # Only strip leading whitespace to preserve trailing spaces in data
                                 if not event_str:
                                     continue
                                 lowered = event_str.lower()
@@ -326,9 +326,13 @@ def stream_chat(
                                 if "event: message" in event_str:
                                     data_lines = []
                                     for line in event_str.split("\n"):
-                                        if line.startswith("data: "):
-                                            data_lines.append(line[6:])
-                                    new_text = "".join(data_lines)
+                                        if line.startswith("data:"):
+                                            # Extract content after "data:", handling optional space per SSE spec
+                                            v = line[5:]
+                                            if v.startswith(" "):
+                                                v = v[1:]
+                                            data_lines.append(v)
+                                    new_text = "\n".join(data_lines)
                                     if not new_text:
                                         continue
                                     if ttft_ms is None:
@@ -352,7 +356,7 @@ def stream_chat(
                                     yield running_history, format_metrics_badges(metrics, ttft_ms, latency_now), session_state_out
                         # Process any remaining buffer content (incomplete final event)
                         if not done and sse_buffer.strip():
-                            event_str = sse_buffer.strip()
+                            event_str = sse_buffer.lstrip()  # Only strip leading whitespace to preserve trailing spaces in data
                             # Process metrics events
                             if "event: error" in event_str:
                                 error_status = None
@@ -397,9 +401,13 @@ def stream_chat(
                             elif "event: message" in event_str:
                                 data_lines = []
                                 for line in event_str.split("\n"):
-                                    if line.startswith("data: "):
-                                        data_lines.append(line[6:])
-                                new_text = "".join(data_lines)
+                                    if line.startswith("data:"):
+                                        # Extract content after "data:", handling optional space per SSE spec
+                                        v = line[5:]
+                                        if v.startswith(" "):
+                                            v = v[1:]
+                                        data_lines.append(v)
+                                new_text = "\n".join(data_lines)
                                 if new_text:
                                     if ttft_ms is None:
                                         ttft_ms = (time.perf_counter() - start_time) * 1000.0

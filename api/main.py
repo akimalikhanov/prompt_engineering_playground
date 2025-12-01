@@ -5,6 +5,10 @@ load_dotenv()
 from utils.otel_config import configure_otel_env_vars, get_service_name
 configure_otel_env_vars()
 
+# NOTE: Do NOT call init_metrics() here - it must be called lazily in each worker process
+# after Gunicorn forks. Calling it here would create a MeterProvider with a background
+# thread that doesn't survive the fork.
+
 from fastapi import FastAPI, HTTPException, Query, Response, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
@@ -41,6 +45,7 @@ from services.prompts_service import (
 )
 from utils.logger_new import setup_logging, correlation_id_middleware, get_correlation_id
 from utils.jinja_renderer import render_messages
+from utils.otel_metrics import record_http_request
 
 import os
 import mlflow
@@ -86,6 +91,34 @@ logger = setup_logging(
 )
 
 app.middleware("http")(correlation_id_middleware)
+
+
+# HTTP metrics middleware
+@app.middleware("http")
+async def http_metrics_middleware(request: Request, call_next):
+    """Record HTTP request metrics for all API calls."""
+    status = 500  # Default to 500 if exception occurs
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    except Exception:
+        raise
+    finally:
+        # Get the route pattern (e.g., "/prompts/{prompt_id}") instead of actual path
+        route = request.url.path
+        if request.scope.get("route"):
+            route = request.scope["route"].path
+        
+        # Skip streaming endpoints because their HTTP status is always 200 regardless of outcome
+        # (errors happen mid-stream). Use pep_llm_requests_total for LLM outcomes instead.
+        if not (route.startswith("/chat.stream") or route.startswith("/chat.streamsse")):
+                record_http_request(
+                route=route,
+                method=request.method,
+                status=status,
+            )
+
 
 # -------------------------
 # Endpoints

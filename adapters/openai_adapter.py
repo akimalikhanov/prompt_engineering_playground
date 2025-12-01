@@ -10,7 +10,7 @@ from utils.sse import sse_pack
 from utils.load_configs import _load_models_config
 from utils.logger_new import log_llm_call
 from utils.errors import _get_status_code
-from utils.otel_metrics import record_llm_request
+from utils.otel_metrics import record_llm_request, record_llm_latency, record_llm_ttft, record_llm_tokens, record_llm_cost, record_llm_tool_call
 
 
 @dataclass
@@ -362,13 +362,67 @@ def _unified_openai_api_call(
             cost_usd=metrics_payload.get("cost_usd"),
             extra_fields=_extra_fields(merged_extra),
         )
-        # Record OTEL metric
+        # Record OTEL metrics
         record_llm_request(
             provider=provider_id,
             model_id=model_identifier,
             status="ok",
             endpoint=backend_endpoint,
         )
+        # Record latency histogram (convert ms to seconds)
+        latency_ms = metrics_payload.get("latency_ms")
+        if latency_ms is not None:
+            record_llm_latency(
+                provider=provider_id,
+                model_id=model_identifier,
+                endpoint=backend_endpoint,
+                latency_seconds=latency_ms / 1000.0,
+            )
+        # Record TTFT histogram (convert ms to seconds)
+        ttft_ms = metrics_payload.get("ttft_ms")
+        if ttft_ms is not None:
+            record_llm_ttft(
+                provider=provider_id,
+                model_id=model_identifier,
+                endpoint=backend_endpoint,
+                ttft_seconds=ttft_ms / 1000.0,
+            )
+        prompt_tokens = metrics_payload.get("prompt_tokens")
+        if prompt_tokens is not None:
+            record_llm_tokens(
+                provider=provider_id,
+                model_id=model_identifier,
+                token_type="prompt",
+                count=prompt_tokens,
+            )
+        completion_tokens = metrics_payload.get("completion_tokens")
+        if completion_tokens is not None:
+            record_llm_tokens(
+                provider=provider_id,
+                model_id=model_identifier,
+                token_type="completion",
+                count=completion_tokens,
+            )
+        # Calculate and record reasoning tokens (for o-series models)
+        # reasoning_tokens = total_tokens - prompt_tokens - completion_tokens
+        total_tokens = metrics_payload.get("total_tokens")
+        if total_tokens is not None and prompt_tokens is not None and completion_tokens is not None:
+            reasoning_tokens = total_tokens - prompt_tokens - completion_tokens
+            if reasoning_tokens > 0:
+                record_llm_tokens(
+                    provider=provider_id,
+                    model_id=model_identifier,
+                    token_type="reasoning",
+                    count=reasoning_tokens,
+                )
+        # Record cost
+        cost_usd = metrics_payload.get("cost_usd")
+        if cost_usd is not None:
+            record_llm_cost(
+                provider=provider_id,
+                model_id=model_identifier,
+                cost_usd=cost_usd,
+            )
 
     def _emit_error(
         exc: Optional[Exception] = None,
@@ -641,6 +695,11 @@ def _unified_openai_api_call(
                         else:
                             raw_result = tool_callable(args)
                         result_content = json.dumps(raw_result)
+                        # Record tool call metric
+                        record_llm_tool_call(
+                            model_id=model_identifier,
+                            tool_name=func_name,
+                        )
                     except Exception as exc:
                         result_content = json.dumps({"error": f"Tool execution failed: {exc}"})
                     
@@ -941,6 +1000,11 @@ def _unified_openai_api_call(
                             args = {}
                     tool_callable = get_tool_callable(name)
                     result = tool_callable(**args) if isinstance(args, dict) else tool_callable(args)
+                    # Record tool call metric
+                    record_llm_tool_call(
+                        model_id=model_identifier,
+                        tool_name=name,
+                    )
                 except Exception as exc:
                     result = {"error": f"Tool '{name}' failed: {exc}"}
 
