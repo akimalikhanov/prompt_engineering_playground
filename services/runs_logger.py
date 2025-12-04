@@ -159,6 +159,7 @@ def log_run(
     cost_usd: Optional[float] = None,
     latency_ms: Optional[int] = None,
     ttft_ms: Optional[int] = None,
+    tokens_per_second: Optional[float] = None,
     status: str = "ok",
     error_type: Optional[str] = None,
     error_code: Optional[str] = None,
@@ -200,6 +201,7 @@ def log_run(
         cost_usd: Cost in USD
         latency_ms: Total latency in milliseconds
         ttft_ms: Time to first token in milliseconds
+        tokens_per_second: Tokens generated per second
         status: Run status ('ok', 'error', 'rate_limited', 'timeout', 'cancelled')
         error_type: Error type if status is error
         error_code: Error code if status is error
@@ -215,7 +217,7 @@ def log_run(
         pricing_snapshot: Pricing information snapshot
         tool_call: Executed tool information to persist to the `tool_call` JSONB column.
         metrics: Dict containing metrics (prompt_tokens, completion_tokens, total_tokens, 
-                 cost_usd, latency_ms, ttft_ms). Values from this dict are used if 
+                 cost_usd, latency_ms, ttft_ms, tokens_per_second). Values from this dict are used if 
                  individual parameters are not provided.
         error_info: Dict containing error details (type, code, message). Values from this
                     dict are used if individual error parameters are not provided.
@@ -238,6 +240,8 @@ def log_run(
             latency_ms = int(metrics.get("latency_ms", 0)) if metrics.get("latency_ms") else None
         if ttft_ms is None:
             ttft_ms = int(metrics.get("ttft_ms", 0)) if metrics.get("ttft_ms") else None
+        if tokens_per_second is None:
+            tokens_per_second = metrics.get("tokens_per_second")
         # If tool_call was not passed explicitly, try to pull it from metrics
         if tool_call is None:
             tool_call = metrics.get("executed_tools")
@@ -279,6 +283,7 @@ def log_run(
             cost_usd=cost_usd,
             latency_ms=latency_ms,
             ttft_ms=ttft_ms,
+            tokens_per_second=tokens_per_second,
             status=status,
             error_type=error_type,
             error_code=error_code,
@@ -347,6 +352,7 @@ def get_run_by_id(run_id: int) -> Optional[Dict[str, Any]]:
             "cost_usd": float(run.cost_usd) if run.cost_usd is not None else None,
             "latency_ms": run.latency_ms,
             "ttft_ms": run.ttft_ms,
+            "tokens_per_second": float(run.tokens_per_second) if run.tokens_per_second is not None else None,
             "status": run.status,
             "error_type": run.error_type,
             "error_code": run.error_code,

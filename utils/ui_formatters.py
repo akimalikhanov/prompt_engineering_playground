@@ -29,6 +29,17 @@ def _format_cost(metrics: Dict[str, Any]) -> Optional[str]:
     return f"${cost:.4f}"
 
 
+def _format_tokens_per_second(metrics: Dict[str, Any]) -> Optional[str]:
+    tokens_per_second = metrics.get("tokens_per_second")
+    if tokens_per_second is None:
+        return None
+    # Round to 1 decimal place, but show as integer if it's a whole number
+    rounded = round(tokens_per_second, 1)
+    if rounded == int(rounded):
+        return f"{int(rounded)} tps"
+    return f"{rounded:.1f} tps"
+
+
 def format_metrics_badges(metrics: Optional[Dict[str, Any]], ttft_fallback: Optional[float], latency_fallback: Optional[float]) -> str:
     metrics = metrics or {}
     ttft_ms = metrics.get("ttft_ms") or ttft_fallback
@@ -37,6 +48,7 @@ def format_metrics_badges(metrics: Optional[Dict[str, Any]], ttft_fallback: Opti
     badges = [
         _render_badge("TTFT", f"{ttft_ms:.0f} ms" if ttft_ms is not None else None),
         _render_badge("Latency", f"{latency_ms:.0f} ms" if latency_ms is not None else None),
+        _render_badge("Speed", _format_tokens_per_second(metrics)),
         _render_badge("Tokens", _format_tokens(metrics)),
         _render_badge("Cost", _format_cost(metrics)),
     ]

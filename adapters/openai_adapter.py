@@ -10,7 +10,7 @@ from utils.sse import sse_pack
 from utils.load_configs import _load_models_config
 from utils.logger_new import log_llm_call
 from utils.errors import _get_status_code
-from utils.otel_metrics import record_llm_request, record_llm_latency, record_llm_ttft, record_llm_tokens, record_llm_cost, record_llm_tool_call
+from utils.otel_metrics import record_llm_request, record_llm_latency, record_llm_ttft, record_llm_tokens_per_second, record_llm_tokens, record_llm_cost, record_llm_tool_call
 
 
 @dataclass
@@ -359,6 +359,7 @@ def _unified_openai_api_call(
             ttft_ms=metrics_payload.get("ttft_ms"),
             prompt_tokens=metrics_payload.get("prompt_tokens"),
             completion_tokens=metrics_payload.get("completion_tokens"),
+            tokens_per_second=metrics_payload.get("tokens_per_second"),
             cost_usd=metrics_payload.get("cost_usd"),
             extra_fields=_extra_fields(merged_extra),
         )
@@ -386,6 +387,15 @@ def _unified_openai_api_call(
                 model_id=model_identifier,
                 endpoint=backend_endpoint,
                 ttft_seconds=ttft_ms / 1000.0,
+            )
+        # Record tokens per second
+        tokens_per_second = metrics_payload.get("tokens_per_second")
+        if tokens_per_second is not None:
+            record_llm_tokens_per_second(
+                provider=provider_id,
+                model_id=model_identifier,
+                endpoint=backend_endpoint,
+                tokens_per_second=tokens_per_second,
             )
         prompt_tokens = metrics_payload.get("prompt_tokens")
         if prompt_tokens is not None:
@@ -764,19 +774,52 @@ def _unified_openai_api_call(
                 return round(cost, 6)
         return None  # model not found
 
-    def _update_usage_totals(usage_obj, totals):
+    def _update_usage_totals(usage_obj, totals, accumulate=False):
+        """
+        Update usage totals from a usage object.
+        
+        Args:
+            usage_obj: Usage object from API response
+            totals: Dict to update with usage totals
+            accumulate: If True, add to existing totals (for tool iterations).
+                       If False, replace existing totals (for single calls with duplicate chunks).
+        """
         if not usage_obj:
             return
         for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
             value = getattr(usage_obj, key, 0) or 0
             if value:
-                totals[key] = (totals[key] or 0) + value
+                if accumulate:
+                    totals[key] = (totals.get(key) or 0) + value
+                else:
+                    # Replace: use the latest value (handles duplicate chunks from same API call)
+                    totals[key] = value
 
-    def _build_metrics_payload(ttft, latency, chunk_count, usage_totals):
+    def _build_metrics_payload(ttft, latency, chunk_count, usage_totals, text_length=None):
         prompt_tokens = usage_totals["prompt_tokens"]
         completion_tokens = usage_totals["completion_tokens"]
         total_tokens = usage_totals["total_tokens"]
         cost_usd = _lookup_pricing(model, prompt_tokens, completion_tokens)
+        
+        # For Gemini models, adjust token count using character-to-token ratio
+        # Gemini streams in chunks and reports tokens optimistically
+        # 1 token ≈ 4 characters for Gemini
+        is_gemini = "gemini" in model.lower()
+        effective_completion_tokens = completion_tokens
+        if is_gemini and text_length is not None and text_length > 0:
+            # Estimate actual tokens from text length
+            estimated_tokens = text_length / 4.0
+            effective_completion_tokens = estimated_tokens
+        
+        # Calculate tokens_per_second: completion_tokens / generation_time
+        # Generation time = total latency - TTFT (excludes initial wait time)
+        tokens_per_second = None
+        if effective_completion_tokens is not None and latency is not None and latency > 0:
+            ttft_seconds = ttft if ttft is not None else 0
+            generation_time = latency - ttft_seconds
+            if generation_time > 0:
+                tokens_per_second = round(effective_completion_tokens / generation_time, 2)
+        
         return {
             "ttft_ms": round(ttft * 1000, 1) if ttft is not None else None,
             "latency_ms": round(latency * 1000, 1),
@@ -790,6 +833,7 @@ def _unified_openai_api_call(
                 if completion_tokens is not None
                 else None
             ),
+            "tokens_per_second": tokens_per_second,
             "cost_usd": cost_usd,
         }
 
@@ -799,6 +843,7 @@ def _unified_openai_api_call(
             def _iter_raw() -> Generator[str, None, None]:
                 ttft = None
                 chunk_count = 0
+                text_length = 0
                 executed_tools = set()
                 usage_totals = {
                     "prompt_tokens": None,
@@ -820,19 +865,21 @@ def _unified_openai_api_call(
                         if ttft is None:
                             ttft = time.perf_counter() - t0
                         # collect usage if/when the final usage chunk arrives
+                        # For tool calls, accumulate across iterations; otherwise replace (handle duplicates)
                         try:
-                            _update_usage_totals(getattr(ch, "usage", None), usage_totals)
+                            _update_usage_totals(getattr(ch, "usage", None), usage_totals, accumulate=bool(tools))
                         except Exception:
                             pass
                         if piece:
                             chunk_count += 1
+                            text_length += len(piece)
                             yield piece
                 except Exception as exc:
                     _emit_error(exc)
                     raise
 
                 total = time.perf_counter() - t0
-                metrics_payload = _build_metrics_payload(ttft, total, chunk_count, usage_totals)
+                metrics_payload = _build_metrics_payload(ttft, total, chunk_count, usage_totals, text_length)
                 if executed_tools:
                     metrics_payload["executed_tools"] = sorted(executed_tools)
                 _emit_success(metrics_payload)
@@ -846,6 +893,7 @@ def _unified_openai_api_call(
         def _iter_sse() -> Generator[bytes, None, None]:
             ttft = None
             chunk_count = 0
+            text_length = 0
             executed_tools = set()
             usage_totals = {
                 "prompt_tokens": None,
@@ -866,19 +914,21 @@ def _unified_openai_api_call(
                     if ttft is None:
                         ttft = time.perf_counter() - t0
                     # capture usage if present (arrives as the last/penultimate chunk)
+                    # For tool calls, accumulate across iterations; otherwise replace (handle duplicates)
                     try:
-                        _update_usage_totals(getattr(ch, "usage", None), usage_totals)
+                        _update_usage_totals(getattr(ch, "usage", None), usage_totals, accumulate=bool(tools))
                     except Exception:
                         pass
                     if piece:
                         chunk_count += 1
+                        text_length += len(piece)
                         yield sse_pack(piece, event=sse_event)
             except Exception as exc:
                 _emit_error(exc)
                 raise
 
             total = time.perf_counter() - t0
-            metrics_payload = _build_metrics_payload(ttft, total, chunk_count, usage_totals)
+            metrics_payload = _build_metrics_payload(ttft, total, chunk_count, usage_totals, text_length)
             if executed_tools:
                 metrics_payload["executed_tools"] = sorted(executed_tools)
             _emit_success(metrics_payload)
@@ -1049,6 +1099,22 @@ def _unified_openai_api_call(
             for tool_name in executed_tools:
                 tool_messages.append(f"🔧 `{tool_name}` is executed...")
 
+        # Calculate tokens_per_second: completion_tokens / total_latency
+        # Note: For non-streaming, TTFT is not available, so we use total latency
+        # For Gemini models, adjust token count using character-to-token ratio
+        is_gemini = "gemini" in model.lower()
+        effective_completion_tokens = completion_tokens_total
+        if is_gemini and final_content:
+            # Estimate actual tokens from text length (1 token ≈ 4 characters for Gemini)
+            text_length = len(final_content)
+            if text_length > 0:
+                estimated_tokens = text_length / 4.0
+                effective_completion_tokens = estimated_tokens
+        
+        tokens_per_second = None
+        if effective_completion_tokens is not None and total is not None and total > 0:
+            tokens_per_second = round(effective_completion_tokens / total, 2)
+
         metrics_payload = {
             "ttft_ms": None,  # not meaningful for non-streaming
             "latency_ms": round(total * 1000, 1),
@@ -1056,6 +1122,7 @@ def _unified_openai_api_call(
             "prompt_tokens": prompt_tokens_total or None,
             "completion_tokens": completion_tokens_total or None,
             "total_tokens": total_tokens_total or None,
+            "tokens_per_second": tokens_per_second,
             "cost_usd": cost_usd,
             "executed_tools": executed_tools if executed_tools else None,
         }

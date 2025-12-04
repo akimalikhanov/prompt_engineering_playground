@@ -41,6 +41,7 @@ class Run(Base):
     
     latency_ms = Column(Integer)
     ttft_ms = Column(Integer)
+    tokens_per_second = Column(Numeric(10, 2))
     status = Column(Text, nullable=False)
     error_type = Column(Text)
     error_code = Column(Text)

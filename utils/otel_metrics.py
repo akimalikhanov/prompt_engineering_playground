@@ -20,6 +20,7 @@ _pid: int | None = None
 _llm_requests_total: Counter | None = None
 _llm_latency_seconds: Histogram | None = None
 _llm_ttft_seconds: Histogram | None = None
+_llm_tokens_per_second: Histogram | None = None
 _llm_tokens_total: Counter | None = None
 _llm_cost_usd_total: Counter | None = None
 _llm_tool_calls_total: Counter | None = None
@@ -34,7 +35,7 @@ def init_metrics() -> None:
     This handles Gunicorn's pre-fork model where each worker process needs its own
     MeterProvider with a live background thread for exporting metrics.
     """
-    global _initialized, _llm_requests_total, _llm_latency_seconds, _llm_ttft_seconds, _llm_tokens_total, _llm_cost_usd_total, _llm_tool_calls_total, _runs_feedback_total, _http_requests_total, _pid, _meter_provider
+    global _initialized, _llm_requests_total, _llm_latency_seconds, _llm_ttft_seconds, _llm_tokens_per_second, _llm_tokens_total, _llm_cost_usd_total, _llm_tool_calls_total, _runs_feedback_total, _http_requests_total, _pid, _meter_provider
     
     current_pid = os.getpid()
     
@@ -82,6 +83,12 @@ def init_metrics() -> None:
         name="pep_llm_ttft_seconds",
         description="LLM time to first token in seconds",
         unit="s",
+    )
+    
+    _llm_tokens_per_second = meter.create_histogram(
+        name="pep_llm_tokens_per_second",
+        description="LLM tokens generated per second",
+        unit="1",
     )
     
     _llm_tokens_total = meter.create_counter(
@@ -207,6 +214,38 @@ def record_llm_ttft(
         if _llm_ttft_seconds and ttft_seconds is not None:
             _llm_ttft_seconds.record(
                 ttft_seconds,
+                attributes={
+                    "provider": provider or "unknown",
+                    "model_id": model_id or "unknown",
+                    "endpoint": endpoint or "unknown",
+                },
+            )
+    except Exception:
+        # Metrics recording should never crash the app
+        pass
+
+
+def record_llm_tokens_per_second(
+    provider: str,
+    model_id: str,
+    endpoint: str,
+    tokens_per_second: float,
+) -> None:
+    """
+    Record LLM tokens per second (TPS).
+    
+    Args:
+        provider: Provider identifier (e.g., 'openai', 'google', 'vllm')
+        model_id: Model identifier (e.g., 'gpt-4o', 'gemini-flash')
+        endpoint: Backend endpoint (e.g., '/chat', '/chat.stream')
+        tokens_per_second: Tokens generated per second
+    """
+    try:
+        init_metrics()
+        
+        if _llm_tokens_per_second and tokens_per_second is not None:
+            _llm_tokens_per_second.record(
+                tokens_per_second,
                 attributes={
                     "provider": provider or "unknown",
                     "model_id": model_id or "unknown",
