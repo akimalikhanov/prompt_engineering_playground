@@ -18,7 +18,8 @@ def _send_feedback_to_backend(
     POST feedback to the backend feedback endpoint.
     Returns True if request succeeded, False otherwise.
     """
-    if not trace_id:
+    # Reject None, empty string, or the default "-" value
+    if not trace_id or trace_id == "-":
         return False
 
     feedback_url = None
@@ -68,10 +69,6 @@ def _apply_feedback_to_message(
     if msg.get("role") != "assistant":
         return history
 
-    content = str(msg.get("content", ""))
-    if content.startswith("🔧"):
-        return history
-
     if liked_state is True:
         feedback_value = 1
     elif liked_state is False:
@@ -102,6 +99,13 @@ def _on_like_event(
     history = history or []
     index = getattr(evt, "index", None)
     liked_state = getattr(evt, "liked", None)
+    log = logger or logging.getLogger(__name__)
+
+    trace_map = {}
+    session_id = None
+    if isinstance(session_state, dict):
+        trace_map = session_state.get("trace_map") or {}
+        session_id = session_state.get("session_id")
 
     history = _apply_feedback_to_message(history, index, liked_state)
 
@@ -113,17 +117,47 @@ def _on_like_event(
     ):
         user_feedback = history[index].get("user_feedback", 0)
 
-    trace_id = None
-    if isinstance(session_state, dict):
-        trace_map = session_state.get("trace_map") or {}
-        trace_id = trace_map.get(index)
+    # Helper to check if trace_id is valid (not None and not the default "-")
+    def _is_valid_trace_id(tid):
+        return tid and tid != "-"
+    
+    # Get trace_id from the exact index only
+    trace_id = trace_map.get(index) if trace_map else None
+    trace_lookup_strategy = "exact_index" if _is_valid_trace_id(trace_id) else "not_found"
+    
+    # If not found, set to None
+    if not _is_valid_trace_id(trace_id):
+        trace_id = None
 
-    _send_feedback_to_backend(
+    selected_msg = history[index] if index is not None and 0 <= index < len(history) else {}
+    msg_role = selected_msg.get("role") if isinstance(selected_msg, dict) else None
+    msg_content = str(selected_msg.get("content", "")) if isinstance(selected_msg, dict) else ""
+    is_tool_message = msg_content.startswith("🔧")
+    
+    send_ok = _send_feedback_to_backend(
         trace_id,
         user_feedback,
         api_base_url,
         default_api_base_url,
-        logger,
+        log,
+    )
+    log.info(
+        "frontend_feedback_dispatch",
+        extra={
+            "event": "frontend_feedback_dispatch",
+            "trace_id": trace_id,
+            "found_trace_id": trace_id,  # Explicitly show the found trace_id
+            "session_id": session_id,
+            # "message_index": index,
+            # "message_role": msg_role,
+            # "is_tool_message": is_tool_message,
+            # "trace_map_size": len(trace_map),
+            # "trace_lookup_strategy": trace_lookup_strategy,
+            "sent": bool(send_ok),
+            "user_feedback": user_feedback,
+            # "liked_state": liked_state,
+            # "content_preview": content_preview,
+        },
     )
     return history
 

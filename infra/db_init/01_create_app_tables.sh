@@ -10,19 +10,6 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE SCHEMA IF NOT EXISTS app;
 
 -- ===============================
--- Techniques registry
--- ===============================
-CREATE TABLE IF NOT EXISTS app.prompt_techniques (
-  technique_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  key            TEXT UNIQUE NOT NULL,         -- e.g., 'cot','react','few-shot'
-  name           TEXT NOT NULL,                -- 'Chain-of-Thought'
-  family         TEXT,                         -- 'reasoning','instruction',...
-  url            TEXT,                         -- reference link
-  short_desc     TEXT NOT NULL,
-  created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- ===============================
 -- Prompt examples
 -- ===============================
 CREATE TABLE IF NOT EXISTS app.prompt_examples (
@@ -89,15 +76,10 @@ CREATE TABLE IF NOT EXISTS app.runs (
   trace_id          TEXT NOT NULL,                                  -- correlate to logs/traces
   request_id        TEXT,                                           -- unique per call if available
   session_id        TEXT,                                           -- chat/session
-  user_id           TEXT,                                           -- who initiated (optional)
   provider_key      TEXT NOT NULL,                                  -- 'openai','google','anthropic',...
   model_id          TEXT NOT NULL,                                  -- 'gpt-4o-mini', etc.
-  prompt_key        TEXT,                                           -- e.g., 'system/coding'
-  prompt_version    TEXT,                                           -- registry version/tag
-  technique_key     TEXT,                                           -- 'cot','react','few-shot', etc.
 
   params_json       JSONB NOT NULL DEFAULT '{}'::jsonb,             -- temperature, top_p, tools
-  variables_json    JSONB NOT NULL DEFAULT '[]'::jsonb,             -- templated vars used
   input_text        TEXT,                                           -- sanitized user input
   system_prompt     TEXT,                                           -- system instructions applied to the run
   context_prompt    TEXT,                                           -- supplemental context provided with the request
@@ -123,9 +105,7 @@ CREATE TABLE IF NOT EXISTS app.runs (
   user_feedback     SMALLINT NOT NULL DEFAULT 0 CHECK (user_feedback IN (-1, 0, 1)),  -- -1 = negative, 0 = neutral/default, 1 = positive
   tool_call         JSONB,                                           -- JSON array or object of user tool names; NULL when unused
 
-  cached            BOOLEAN NOT NULL DEFAULT FALSE,
-  pricing_snapshot  JSONB NOT NULL DEFAULT '{}'::jsonb,             -- {"input_per_1k":0.15,...}
-  metadata          JSONB NOT NULL DEFAULT '{}'::jsonb              -- tags/ab-test, biz labels
+  cached            BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 -- Indexes for BI
@@ -133,14 +113,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_runs_request_id
   ON app.runs (request_id) WHERE request_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS ix_runs_time            ON app.runs (occurred_at DESC);
-CREATE INDEX IF NOT EXISTS ix_runs_model_time      ON app.runs (model_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS ix_runs_status_time     ON app.runs (status, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS ix_runs_trace           ON app.runs (trace_id);
-CREATE INDEX IF NOT EXISTS ix_runs_provider_model  ON app.runs (provider_key, model_id);
+CREATE INDEX IF NOT EXISTS ix_runs_provider_model  ON app.runs (provider_key, model_id, occurred_at DESC);
 
 -- Light JSONB indexes for common filters
 CREATE INDEX IF NOT EXISTS gin_runs_params         ON app.runs USING GIN (params_json);
-CREATE INDEX IF NOT EXISTS gin_runs_metadata       ON app.runs USING GIN (metadata);
 
 -- Grant permissions to the current user (APP_DB_USER)
 -- Since we're running as APP_DB_USER, ensure schema ownership and permissions

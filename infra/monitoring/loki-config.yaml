@@ -70,5 +70,6 @@ limits_config:
           - status
           - http_status
           - backend_endpoint
+          - logger_name
           - level
           - stream_mode

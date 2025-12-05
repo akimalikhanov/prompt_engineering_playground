@@ -97,24 +97,26 @@ def get_otel_resource() -> Resource:
             SERVICE_NAME: get_service_name(),
             SERVICE_NAMESPACE: get_service_namespace(),
             DEPLOYMENT_ENVIRONMENT: get_deployment_environment(),
-            "service.instance.id": get_process_instance_id(),
+            # "service.instance.id": get_process_instance_id(),
         })
     return _resource
 
 
-def get_resource_attributes_string() -> str:
+def get_resource_attributes_string(include_instance_id: bool = False) -> str:
     """
     Get resource attributes as a comma-separated string for env vars.
     
-    Format: "service.name=X,service.namespace=Y,deployment.environment=Z,service.instance.id=W"
-    Used for setting OTEL_RESOURCE_ATTRIBUTES env var (e.g., for MLflow).
+    Format (example): "service.name=X,service.namespace=Y,deployment.environment=Z"
+    Optionally include "service.instance.id" when include_instance_id is True.
     """
-    return (
-        f"service.name={get_service_name()},"
-        f"service.namespace={get_service_namespace()},"
-        f"deployment.environment={get_deployment_environment()},"
-        f"service.instance.id={get_process_instance_id()}"
-    )
+    attrs = [
+        f"service.name={get_service_name()}",
+        f"service.namespace={get_service_namespace()}",
+        f"deployment.environment={get_deployment_environment()}",
+    ]
+    if include_instance_id:
+        attrs.append(f"service.instance.id={get_process_instance_id()}")
+    return ",".join(attrs)
 
 
 def configure_otel_env_vars() -> None:

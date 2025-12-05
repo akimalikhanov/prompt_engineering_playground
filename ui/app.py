@@ -44,6 +44,7 @@ from utils.session_utils import (
     _update_session_from_metrics,
 )
 from utils.ui_formatters import format_metrics_badges
+from utils.otel_config import configure_otel_env_vars
 
 
 MODELS_DATA = _load_models()
@@ -56,15 +57,18 @@ if DEFAULT_MODEL_ID is None:
 DEFAULT_API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 UI_LOGGER_NAME = os.getenv("UI_LOGGER_NAME", "ui")
+UI_OTEL_LOGS_ENABLED = os.getenv("OTEL_LOGS_ENABLED", "true").lower() == "true"
 
 # Structured JSON logger for the UI process (console only; backend handles LLM metrics).
+# Set OTEL env vars early so OTLP exporter has service/resource metadata.
+configure_otel_env_vars()
 ui_logger = setup_logging(
     app_logger_name=UI_LOGGER_NAME,
     level=logging.INFO,
     to_console=True,
     to_file=False,
     hijack_uvicorn=True,
-    enable_otel=os.getenv("OTEL_LOGS_ENABLED", "").lower()=="true",
+    enable_otel=UI_OTEL_LOGS_ENABLED,
 )
 
 ENDPOINTS = _load_endpoints()
@@ -309,6 +313,8 @@ def stream_chat(
                                                     running_history,
                                                     metrics,
                                                     session_state_out,
+                                                    logger=ui_logger,
+                                                    source="sse_metrics_event",
                                                 )
                                             except json.JSONDecodeError:
                                                 pass
@@ -386,6 +392,8 @@ def stream_chat(
                                                 running_history,
                                                 metrics,
                                                 session_state_out,
+                                                logger=ui_logger,
+                                                source="sse_final_buffer",
                                             )
                                         except json.JSONDecodeError:
                                             pass
@@ -459,6 +467,8 @@ def stream_chat(
                                         running_history,
                                         metrics,
                                         session_state_out,
+                                        logger=ui_logger,
+                                        source="raw_stream_metrics",
                                     )
                                     continue
                                 if "tool_status" in json_payload:
@@ -520,6 +530,8 @@ def stream_chat(
                     running_history,
                     metrics,
                     session_state_out,
+                    logger=ui_logger,
+                    source="non_stream_response",
                 )
 
                 if ttft_ms is None and metrics.get("ttft_ms") is not None:

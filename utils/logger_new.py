@@ -30,6 +30,8 @@ def set_correlation_id(corr_id: Optional[str] = None) -> str:
 class CorrelationFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.correlation_id = get_correlation_id()
+        # Include logger_name so it becomes an OTEL log attribute (for Loki querying)
+        record.logger_name = record.name
         return True
 
 THIRD_PARTY_LOGGERS = (
