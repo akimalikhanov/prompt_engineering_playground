@@ -136,14 +136,9 @@ class RunResponse(BaseModel):
     trace_id: str
     request_id: Optional[str] = None
     session_id: Optional[str] = None
-    user_id: Optional[str] = None
     provider_key: str
     model_id: str
-    prompt_key: Optional[str] = None
-    prompt_version: Optional[str] = None
-    technique_key: Optional[str] = None
     params_json: Dict[str, Any] = {}
-    variables_json: List[Dict[str, Any]] = []
     input_text: Optional[str] = None
     system_prompt: Optional[str] = None
     context_prompt: Optional[str] = None
@@ -161,8 +156,6 @@ class RunResponse(BaseModel):
     error_code: Optional[str] = None
     error_message: Optional[str] = None
     cached: bool = False
-    pricing_snapshot: Dict[str, Any] = {}
-    metadata_json: Dict[str, Any] = {}
 
 
 class RunFeedbackRequest(BaseModel):

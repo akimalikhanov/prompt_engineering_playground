@@ -9,8 +9,13 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
 from opentelemetry.metrics import Counter, Histogram
+from opentelemetry.sdk.resources import Resource
 
-from utils.otel_config import get_otel_resource, get_otlp_metrics_endpoint
+from utils.otel_config import (
+    get_otel_resource,
+    get_otlp_metrics_endpoint,
+    get_process_instance_id,
+)
 
 # ---------------------------------------------------------------------------
 # Lazy initialization (singleton pattern)
@@ -27,6 +32,30 @@ _llm_tool_calls_total: Counter | None = None
 _runs_feedback_total: Counter | None = None
 _http_requests_total: Counter | None = None
 _meter_provider: MeterProvider | None = None
+_metrics_resource: Resource | None = None
+
+
+def _get_metrics_resource() -> Resource:
+    """
+    Build a metrics-only OTEL resource that includes a per-worker identifier.
+
+    We intentionally avoid adding the worker id to the shared OTEL resource to
+    prevent it from becoming a Loki log label. Metrics still need the worker id
+    so Prometheus can differentiate data emitted by each Gunicorn worker.
+    """
+    global _metrics_resource
+
+    if _metrics_resource is None:
+        worker_id = get_process_instance_id()
+        worker_resource = Resource.create(
+            {
+                # Standard OTEL attribute used by Prometheus exporter as a label
+                "service.instance.id": worker_id,
+            }
+        )
+        _metrics_resource = get_otel_resource().merge(worker_resource)
+
+    return _metrics_resource
 
 
 def init_metrics() -> None:
@@ -52,7 +81,10 @@ def init_metrics() -> None:
         # Create our own provider - don't rely on global state which may be inherited from fork
         exporter = OTLPMetricExporter(endpoint=get_otlp_metrics_endpoint())
         reader = PeriodicExportingMetricReader(exporter, export_interval_millis=15000)
-        _meter_provider = MeterProvider(resource=get_otel_resource(), metric_readers=[reader])
+        _meter_provider = MeterProvider(
+            resource=_get_metrics_resource(),
+            metric_readers=[reader],
+        )
         
         # Try to set it globally (may fail if already set, but that's OK)
         # try:

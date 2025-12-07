@@ -60,6 +60,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      pgbouncer:
+        condition: service_started
       minio:
         condition: service_started
     env_file: ../.env
@@ -76,7 +78,7 @@ services:
         mlflow server
         --host 0.0.0.0
         --port ${MLFLOW_PORT}
-        --backend-store-uri postgresql+psycopg2://${MLFLOW_DB_USER}:${MLFLOW_DB_PASSWORD}@postgres:5432/${MLFLOW_DB}
+        --backend-store-uri postgresql+psycopg2://${MLFLOW_DB_USER}:${MLFLOW_DB_PASSWORD}@pgbouncer:${PGB_APP_DB_PORT}/${MLFLOW_DB}
         --artifacts-destination s3://${MINIO_BUCKET}
         --serve-artifacts
     ports:
@@ -150,9 +152,11 @@ services:
   grafana:
     image: grafana/grafana:12.2.0
     container_name: grafana
+    env_file:
+      - ../.env
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASS}
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_MAX_REQUEST_SIZE=50MB
       - GF_SERVER_MAX_QUERY_RESULT_SIZE=50MB
@@ -181,6 +185,20 @@ services:
     restart: unless-stopped
     depends_on:
       - otel-collector
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.24.1-p1
+    container_name: pgbouncer
+    depends_on:
+      - postgres
+    ports:
+      - "6432:6432"
+    env_file:
+      - ../.env
+    entrypoint: ["/bin/sh", "/pgbouncer-entrypoint.sh"]
+    volumes:
+      - ./pgbouncer-entrypoint.sh:/pgbouncer-entrypoint.sh:ro
+
 
 volumes:
   tempo-data:

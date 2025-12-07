@@ -32,8 +32,8 @@ models:
     pricing:
       currency: USD
       unit: per_1k_tokens
-      input: 0.00250           # $/1,000 input tokens for GPT-4o
-      output: 0.01000          # $/1,000 output tokens
+      input: ${GPT_INPUT_PRICE:-0.00250}
+      output: ${GPT_OUTPUT_PRICE:-0.01000}
       cached_input: null
       cached_output: null
       rounding: exact
@@ -51,8 +51,8 @@ models:
     pricing:
       currency: USD
       unit: per_1k_tokens
-      input: 0.00015              # $/1,000 input tokens for GPT-4o-mini
-      output: 0.00060             # $/1,000 output tokens
+      input: ${GPT_MINI_INPUT_PRICE:-0.00015}
+      output: ${GPT_MINI_OUTPUT_PRICE:-0.00060}
       cached_input: null          # set if OpenAI exposes cheaper cached input
       cached_output: null         # likewise
       rounding: exact             # you can choose ceil_1k / nearest_1k / exact
@@ -70,8 +70,8 @@ models:
     pricing:
       currency: USD
       unit: per_1k_tokens
-      input: 0.00110              # $/1,000 input tokens for o4-mini
-      output: 0.00440             # $/1,000 output tokens
+      input: ${GPT_O4_MINI_INPUT_PRICE:-0.00110}
+      output: ${GPT_O4_MINI_OUTPUT_PRICE:-0.00440}
       cached_input: null
       cached_output: null
       rounding: exact
@@ -89,8 +89,8 @@ models:
     pricing:
       currency: USD
       unit: per_1k_tokens
-      input: 0.0
-      output: 0.0
+      input: ${GEMINI_FLASH_LITE_INPUT_PRICE:-0.0}
+      output: ${GEMINI_FLASH_LITE_OUTPUT_PRICE:-0.0}
       notes: "Free tier is used (daily rate limits are applied by Google)"
     capabilities:
       streaming: true
@@ -104,8 +104,8 @@ models:
     pricing:
       currency: USD
       unit: per_1k_tokens
-      input: 0.0
-      output: 0.0
+      input: ${GEMINI_FLASH_INPUT_PRICE:-0.0}
+      output: ${GEMINI_FLASH_OUTPUT_PRICE:-0.0}
       notes: "Free tier is used (daily rate limits are applied by Google)"
     capabilities:
       streaming: true

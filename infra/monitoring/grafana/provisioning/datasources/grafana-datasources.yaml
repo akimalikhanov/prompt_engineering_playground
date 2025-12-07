@@ -37,3 +37,20 @@ datasources:
         filterBySpanID: true
       lokiSearch:
         datasourceUid: loki
+
+  - name: App Postgres (via PgBouncer)
+    uid: app-postgres
+    type: postgres
+    access: proxy
+    url: pgbouncer:6432
+    user: ${APP_DB_USER}
+    secureJsonData:
+      password: ${APP_DB_PASSWORD}
+    jsonData:
+      database: ${APP_DB}
+      sslmode: disable
+      postgresVersion: 1500   # PostgreSQL 15.x
+      timescaledb: false
+      maxOpenConns: 50        # optional tuning
+      maxIdleConns: 10
+      connMaxLifetime: 14400  # 4 hours in seconds

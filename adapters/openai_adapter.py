@@ -763,12 +763,25 @@ def _unified_openai_api_call(
 
     def _lookup_pricing(model_id: str, prompt_tokens: int, completion_tokens: int) -> float:
         """Compute USD cost for a given model and token usage."""
+        def _get_env_value(value):
+            """Parse env var reference like ${VAR:-default} or return value as-is."""
+            if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
+                # Extract ${VAR:-default} pattern
+                inner = value[2:-1]
+                if ":-" in inner:
+                    var_name, default = inner.split(":-", 1)
+                    return float(os.getenv(var_name, default))
+                else:
+                    # ${VAR} without default
+                    return float(os.getenv(inner, "0.0"))
+            return float(value) if value is not None else 0.0
+        
         cfg = _load_models_config()
         for m in cfg.get("models", []):
             if m.get("id") == model_id or m.get("model_name") == model_id:
                 pricing = m.get("pricing", {})
-                in_rate = pricing.get("input", 0.0)   # $ per 1k prompt tokens
-                out_rate = pricing.get("output", 0.0) # $ per 1k completion tokens
+                in_rate = _get_env_value(pricing.get("input", 0.0))   # $ per 1k prompt tokens
+                out_rate = _get_env_value(pricing.get("output", 0.0)) # $ per 1k completion tokens
                 cost = (prompt_tokens or 0) * in_rate / 1000.0 \
                     + (completion_tokens or 0) * out_rate / 1000.0
                 return round(cost, 6)

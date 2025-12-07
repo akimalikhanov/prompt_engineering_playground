@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS app.runs (
 
   latency_ms        INTEGER,
   ttft_ms           INTEGER,
+  is_stream         BOOLEAN GENERATED ALWAYS AS (ttft_ms IS NOT NULL AND tokens_per_second IS NOT NULL) STORED,
   tokens_per_second  NUMERIC(10,2),
   status            TEXT NOT NULL CHECK (status IN ('ok','error','rate_limited','timeout','cancelled')),
   error_type        TEXT,

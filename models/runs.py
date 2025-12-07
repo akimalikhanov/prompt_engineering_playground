@@ -17,16 +17,11 @@ class Run(Base):
     trace_id = Column(Text, nullable=False)
     request_id = Column(Text)
     session_id = Column(Text)
-    user_id = Column(Text)
     
     provider_key = Column(Text, nullable=False)
     model_id = Column(Text, nullable=False)
-    prompt_key = Column(Text)
-    prompt_version = Column(Text)
-    technique_key = Column(Text)
     
     params_json = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
-    variables_json = Column(JSONB, nullable=False, server_default=text("'[]'::jsonb"))
     input_text = Column(Text)
     system_prompt = Column(Text)
     context_prompt = Column(Text)
@@ -41,6 +36,7 @@ class Run(Base):
     
     latency_ms = Column(Integer)
     ttft_ms = Column(Integer)
+    is_stream = Column(Boolean, Computed("ttft_ms IS NOT NULL AND tokens_per_second IS NOT NULL"))  # Generated column: TRUE if streaming (both ttft_ms and tokens_per_second are not null)
     tokens_per_second = Column(Numeric(10, 2))
     status = Column(Text, nullable=False)
     error_type = Column(Text)
@@ -48,8 +44,6 @@ class Run(Base):
     error_message = Column(Text)
     
     cached = Column(Boolean, nullable=False, server_default=text("false"))
-    pricing_snapshot = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
-    metadata_json = Column("metadata", JSONB, nullable=False, server_default=text("'{}'::jsonb"))
 
     # User feedback and tool calls (added later)
     user_feedback = Column(SmallInteger, nullable=False, server_default=text("0"))

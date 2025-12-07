@@ -18,16 +18,22 @@ from models.runs import Run
 load_dotenv()
 
 # Database connection
-DB_HOST = os.getenv("POSTGRES_HOST", "localhost")
-DB_PORT = os.getenv("POSTGRES_PORT", "5433")
+DB_HOST = os.getenv("PGB_APP_DB_HOST", "localhost")
+DB_PORT = os.getenv("PGB_APP_DB_PORT", "5433")
 DB_NAME = os.getenv("APP_DB", "app")
 DB_USER = os.getenv("APP_DB_USER", "app_user")
-DB_PASSWORD = os.getenv("APP_DB_PASSWORD", "app_password")
+DB_PASSWORD = os.getenv("APP_DB_PASSWORD")
 
 DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 
 # Create engine and session factory
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+engine = create_engine(DATABASE_URL,
+    pool_pre_ping=True,   # check connections before using them
+    pool_size=5,          # number of persistent connections in the pool
+    max_overflow=5,       # extra connections allowed above pool_size during spikes
+    pool_recycle=1800,    # recycle connections every 30 minutes to avoid stale ones
+    pool_timeout=30,      # wait up to 30s for a connection from the pool. If all still busy, timeout error
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -166,13 +172,6 @@ def log_run(
     error_message: Optional[str] = None,
     request_id: Optional[str] = None,
     session_id: Optional[str] = None,
-    user_id: Optional[str] = None,
-    prompt_key: Optional[str] = None,
-    prompt_version: Optional[str] = None,
-    technique_key: Optional[str] = None,
-    variables_json: Optional[List[Dict]] = None,
-    metadata: Optional[Dict] = None,
-    pricing_snapshot: Optional[Dict] = None,
     tool_call: Optional[Any] = None,
     # Dict-based parameters (for convenience)
     metrics: Optional[Dict[str, Any]] = None,
@@ -208,13 +207,6 @@ def log_run(
         error_message: Error message if status is error
         request_id: Unique request ID
         session_id: Session/conversation ID
-        user_id: User identifier
-        prompt_key: Prompt template key
-        prompt_version: Prompt version/tag
-        technique_key: Technique used (e.g., 'cot', 'react')
-        variables_json: Template variables used
-        metadata: Additional metadata as JSON
-        pricing_snapshot: Pricing information snapshot
         tool_call: Executed tool information to persist to the `tool_call` JSONB column.
         metrics: Dict containing metrics (prompt_tokens, completion_tokens, total_tokens, 
                  cost_usd, latency_ms, ttft_ms, tokens_per_second). Values from this dict are used if 
@@ -265,14 +257,9 @@ def log_run(
             trace_id=trace_id,
             request_id=request_id or trace_id,  # Use trace_id as fallback
             session_id=session_id,
-            user_id=user_id,
             provider_key=provider_key,
             model_id=model_id,
-            prompt_key=prompt_key,
-            prompt_version=prompt_version,
-            technique_key=technique_key,
             params_json=params or {},
-            variables_json=variables_json or [],
             input_text=extract_input_text(messages),
             system_prompt=(system_prompt or extract_system_prompt(messages)),
             context_prompt=(context_prompt or extract_context_prompt(messages)),
@@ -288,8 +275,6 @@ def log_run(
             error_type=error_type,
             error_code=error_code,
             error_message=error_message[:500] if error_message else None,
-            pricing_snapshot=pricing_snapshot or {},
-            metadata_json=metadata or {},
             tool_call=tool_call,
         )
         
@@ -332,14 +317,9 @@ def get_run_by_id(run_id: int) -> Optional[Dict[str, Any]]:
             "trace_id": run.trace_id,
             "request_id": run.request_id,
             "session_id": run.session_id,
-            "user_id": run.user_id,
             "provider_key": run.provider_key,
             "model_id": run.model_id,
-            "prompt_key": run.prompt_key,
-            "prompt_version": run.prompt_version,
-            "technique_key": run.technique_key,
             "params_json": run.params_json or {},
-            "variables_json": run.variables_json or [],
             "input_text": run.input_text,
             "system_prompt": run.system_prompt,
             "context_prompt": run.context_prompt,
@@ -358,8 +338,6 @@ def get_run_by_id(run_id: int) -> Optional[Dict[str, Any]]:
             "error_code": run.error_code,
             "error_message": run.error_message,
             "cached": run.cached,
-            "pricing_snapshot": run.pricing_snapshot or {},
-            "metadata_json": run.metadata_json or {},
             "tool_call": run.tool_call,
         }
         
