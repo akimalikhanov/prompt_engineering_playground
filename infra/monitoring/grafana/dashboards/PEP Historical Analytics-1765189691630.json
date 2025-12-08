@@ -1,0 +1,2592 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": 0,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 3,
+      "panels": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 1
+          },
+          "id": 1,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "percentChangeColorMode": "standard",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "showPercentChange": false,
+            "textMode": "auto",
+            "wideLayout": true
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  count(*) AS total_runs\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  );\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Total Runs",
+          "type": "stat"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 1
+          },
+          "id": 2,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "percentChangeColorMode": "standard",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "showPercentChange": false,
+            "textMode": "auto",
+            "wideLayout": true
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  count(distinct session_id) AS total_runs\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  );\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Total Sessions",
+          "type": "stat"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "currencyUSD"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 1
+          },
+          "id": 5,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "percentChangeColorMode": "standard",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "showPercentChange": false,
+            "textMode": "auto",
+            "wideLayout": true
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  sum(cost_usd) AS total_cost\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  );\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Total Cost",
+          "type": "stat"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 8,
+            "x": 0,
+            "y": 57
+          },
+          "id": 6,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "percentChangeColorMode": "standard",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "showPercentChange": false,
+            "textMode": "auto",
+            "wideLayout": true
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  COUNT(*) AS total,\n  SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS success,\n  SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error,\n  ROUND(\n    100.0 * SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0),\n    2\n  ) AS \"success rate\"\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  );\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Success Rate",
+          "type": "stat"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 8,
+            "x": 8,
+            "y": 57
+          },
+          "id": 7,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "percentChangeColorMode": "standard",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "showPercentChange": false,
+            "textMode": "auto",
+            "wideLayout": true
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  COUNT(*) AS runs,\n  SUM(CASE WHEN user_feedback = 1 THEN 1 ELSE 0 END) AS likes,\n  SUM(CASE WHEN user_feedback = -1 THEN 1 ELSE 0 END) AS dislikes,\n  SUM(CASE WHEN user_feedback = 0 THEN 1 ELSE 0 END) AS neutral,\n  ROUND(\n    100.0 * SUM(CASE WHEN user_feedback = 1 THEN 1 ELSE 0 END)\n    / NULLIF(\n        SUM(CASE WHEN user_feedback IN (1, -1) THEN 1 ELSE 0 END),\n        0\n      ),\n    2\n  ) AS \"like rate\"\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  );\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Feedback Rate",
+          "type": "stat"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 8,
+            "x": 16,
+            "y": 57
+          },
+          "id": 4,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "percentChangeColorMode": "standard",
+            "reduceOptions": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "fields": "",
+              "values": false
+            },
+            "showPercentChange": false,
+            "textMode": "auto",
+            "wideLayout": true
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  COALESCE(SUM(prompt_tokens), 0)     AS prompt,\n  COALESCE(SUM(completion_tokens), 0) AS completion,\n  COALESCE(SUM(reasoning_tokens), 0)  AS reasoning,\n  COALESCE(SUM(total_tokens), 0)      AS total\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  );\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Total Tokens",
+          "type": "stat"
+        }
+      ],
+      "title": "Overview (KPIs)",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 1
+      },
+      "id": 8,
+      "panels": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "auto",
+                "showValues": false,
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 11,
+            "x": 0,
+            "y": 144
+          },
+          "id": 9,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "median"
+              ],
+              "displayMode": "table",
+              "placement": "right",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  date_trunc('${bucket}', occurred_at) AS time,\n  SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS \"Success\",\n  SUM(CASE WHEN status <> 'ok' THEN 1 ELSE 0 END) AS \"Error\"\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  )\nGROUP BY time\nORDER BY time;\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Runs Over Time",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "Tokens",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "auto",
+                "showValues": false,
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 11,
+            "x": 11,
+            "y": 144
+          },
+          "id": 10,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "median"
+              ],
+              "displayMode": "table",
+              "placement": "right",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  date_trunc('${bucket}', occurred_at) AS time,\n  COALESCE(SUM(prompt_tokens), 0)     AS prompt,\n  COALESCE(SUM(completion_tokens), 0) AS completion,\n  COALESCE(SUM(reasoning_tokens), 0)  AS reasoning,\n  COALESCE(SUM(total_tokens), 0)      AS total\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  )\nGROUP BY time\nORDER BY time;\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Tokens Over Time",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "Sessions",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "auto",
+                "showValues": false,
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 11,
+            "x": 0,
+            "y": 184
+          },
+          "id": 12,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "median"
+              ],
+              "displayMode": "table",
+              "placement": "right",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  date_trunc('${bucket}', occurred_at) AS time,\n  count(distinct session_id)\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  )\nGROUP BY time\nORDER BY time;\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Sessions Over Time",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "Cost ($)",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "auto",
+                "showValues": false,
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 11,
+            "x": 11,
+            "y": 184
+          },
+          "id": 11,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull",
+                "median"
+              ],
+              "displayMode": "table",
+              "placement": "right",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  date_trunc('${bucket}', occurred_at) AS time,\n  SUM(cost_usd) AS \"Cost USD\"\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  )\nGROUP BY time\nORDER BY time;\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Cost Over Time",
+          "type": "timeseries"
+        }
+      ],
+      "title": "Traffic (Requests)",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 2
+      },
+      "id": 13,
+      "panels": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "Runs",
+                "axisPlacement": "auto",
+                "fillOpacity": 80,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "lineWidth": 1,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "fieldMinMax": false,
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 145
+          },
+          "id": 14,
+          "options": {
+            "barRadius": 0,
+            "barWidth": 0.97,
+            "fullHighlight": false,
+            "groupWidth": 0.7,
+            "legend": {
+              "calcs": [],
+              "displayMode": "list",
+              "placement": "right",
+              "showLegend": false
+            },
+            "orientation": "auto",
+            "showValue": "never",
+            "stacking": "none",
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "single",
+              "sort": "none"
+            },
+            "xTickLabelRotation": 0,
+            "xTickLabelSpacing": 0
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  model_id,\n  COUNT(*) AS runs\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  )\nGROUP BY\n  model_id\nORDER BY\n  runs DESC\nLIMIT 10;\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Top Models by Runs",
+          "type": "barchart"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "Total tokens",
+                "axisPlacement": "auto",
+                "fillOpacity": 80,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "lineWidth": 1,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "fieldMinMax": false,
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 145
+          },
+          "id": 15,
+          "options": {
+            "barRadius": 0,
+            "barWidth": 0.97,
+            "fullHighlight": false,
+            "groupWidth": 0.7,
+            "legend": {
+              "calcs": [],
+              "displayMode": "list",
+              "placement": "right",
+              "showLegend": false
+            },
+            "orientation": "auto",
+            "showValue": "never",
+            "stacking": "none",
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "single",
+              "sort": "none"
+            },
+            "xTickLabelRotation": 0,
+            "xTickLabelSpacing": 0
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  model_id,\n  COALESCE(sum(total_tokens), 0) AS \"total tokens\"\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  )\nGROUP BY\n  model_id\nORDER BY\n  2 DESC\nLIMIT 10;\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Top Models by Token Usage",
+          "type": "barchart"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "footer": {
+                  "reducers": []
+                },
+                "inspect": false
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 153
+          },
+          "id": 16,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "sortBy": [
+              {
+                "desc": true,
+                "displayName": "total_cost_usd"
+              }
+            ]
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  model_id,\n  COUNT(*)                                  AS runs,\n  COALESCE(SUM(total_tokens), 0)            AS total_tokens,\n  COALESCE(SUM(cost_usd), 0)                AS total_cost_usd\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  )\nGROUP BY\n  model_id\nORDER BY\n  total_cost_usd DESC\nLIMIT 10;\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Top Models by Cost",
+          "type": "table"
+        }
+      ],
+      "title": "Model Popularity (Runs & Consumption)",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 3
+      },
+      "id": 17,
+      "panels": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "footer": {
+                  "reducers": []
+                },
+                "hideFrom": {
+                  "viz": false
+                },
+                "inspect": false
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 210
+          },
+          "id": 18,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "sortBy": [
+              {
+                "desc": true,
+                "displayName": "like_rate_pct"
+              }
+            ]
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  model_id,\n  COUNT(*) AS total_runs,\n  SUM(CASE WHEN user_feedback = 1  THEN 1 ELSE 0 END) AS likes,\n  SUM(CASE WHEN user_feedback = -1 THEN 1 ELSE 0 END) AS dislikes,\n  SUM(CASE WHEN user_feedback = 0  THEN 1 ELSE 0 END) AS neutral,\n  ROUND(\n    100.0 * SUM(CASE WHEN user_feedback = 1 THEN 1 ELSE 0 END)\n    / NULLIF(\n        SUM(CASE WHEN user_feedback IN (1, -1) THEN 1 ELSE 0 END),\n        0\n      ),\n    2\n  ) AS like_rate_pct,\n  -- optional: net score = likes - dislikes\n  SUM(CASE WHEN user_feedback = 1 THEN 1 ELSE 0 END)\n  - SUM(CASE WHEN user_feedback = -1 THEN 1 ELSE 0 END) AS net_score\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  )\nGROUP BY\n  model_id\nORDER BY\n  like_rate_pct DESC,\n  total_runs DESC;\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Like Rate by Model",
+          "type": "table"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "auto",
+                "showValues": false,
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 210
+          },
+          "id": 19,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "displayMode": "table",
+              "placement": "right",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  date_trunc('${bucket}', occurred_at) AS time,\n  SUM(CASE WHEN user_feedback = 1  THEN 1 ELSE 0 END) AS likes,\n  SUM(CASE WHEN user_feedback = -1 THEN 1 ELSE 0 END) AS dislikes,\n  coalesce(ROUND(\n    100.0 * SUM(CASE WHEN user_feedback = 1 THEN 1 ELSE 0 END)\n    / NULLIF(\n        SUM(CASE WHEN user_feedback IN (1, -1) THEN 1 ELSE 0 END),\n        0\n      ),\n    2\n  ), 0) AS \"like rate\"\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  )\nGROUP BY\n  time\nORDER BY\n  time;\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Like Rate Over Time",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "Count",
+                "axisPlacement": "auto",
+                "fillOpacity": 80,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "lineWidth": 1,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 218
+          },
+          "id": 20,
+          "options": {
+            "barRadius": 0,
+            "barWidth": 0.97,
+            "fullHighlight": false,
+            "groupWidth": 0.7,
+            "legend": {
+              "calcs": [],
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "orientation": "auto",
+            "showValue": "auto",
+            "stacking": "none",
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "single",
+              "sort": "none"
+            },
+            "xTickLabelRotation": 0,
+            "xTickLabelSpacing": 0
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "WITH filtered_runs AS (\n  SELECT tool_call\n  FROM app.runs\n  WHERE\n    $__timeFilter(occurred_at)\n    AND provider_key IN (${provider})\n    AND model_id IN (${model})\n    AND (\n      CASE\n        WHEN is_stream THEN 'Streaming'\n        ELSE 'Non-streaming'\n      END\n      IN (${endpoint})\n    )\n    AND tool_call IS NOT NULL\n),\ntool_rows AS (\n  -- case 1: tool_call is a JSON array, e.g. [\"get_custom_movie_details\"]\n  SELECT\n    jsonb_array_elements_text(tool_call) AS tool_name\n  FROM filtered_runs\n  WHERE jsonb_typeof(tool_call) = 'array'\n\n  UNION ALL\n\n  -- case 2: tool_call is a JSON object, e.g. {\"get_custom_movie_details\": {...}}\n  SELECT\n    jsonb_object_keys(tool_call) AS tool_name\n  FROM filtered_runs\n  WHERE jsonb_typeof(tool_call) = 'object'\n)\nSELECT\n  tool_name,\n  COUNT(*) AS runs_with_tool\nFROM tool_rows\nGROUP BY\n  tool_name\nORDER BY\n  runs_with_tool DESC;\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Tool Usage",
+          "type": "barchart"
+        }
+      ],
+      "title": "User Feedback & Tool Usage",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "id": 21,
+      "panels": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "footer": {
+                  "reducers": []
+                },
+                "hideFrom": {
+                  "viz": false
+                },
+                "inspect": false
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 5
+          },
+          "id": 24,
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  model_id,\n  COUNT(*) AS runs,\n\n  -- Latency\n  ROUND(AVG(latency_ms), 2) AS avg_latency_ms,\n  ROUND(\n    PERCENTILE_DISC(0.9) WITHIN GROUP (ORDER BY latency_ms),\n    2\n  ) AS p90_latency_ms,\n\n  -- Time to first token (mostly meaningful for streaming models)\n  ROUND(AVG(ttft_ms), 2) AS avg_ttft_ms,\n\n  -- Throughput & size\n  ROUND(AVG(total_tokens), 2) AS avg_tokens_per_run,\n  ROUND(AVG(tokens_per_second), 2) AS avg_tps\n\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  )\n  -- Optional: only consider rows where we actually have latency\n  AND latency_ms IS NOT NULL\nGROUP BY\n  model_id\nORDER BY\n  avg_latency_ms ASC;   -- or runs DESC, or avg_tps DESC, depending on what you prefer\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Model Performance Summary",
+          "type": "table"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "fillOpacity": 80,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "lineWidth": 1,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 5
+          },
+          "id": 25,
+          "options": {
+            "barRadius": 0,
+            "barWidth": 0.97,
+            "fullHighlight": false,
+            "groupWidth": 0.7,
+            "legend": {
+              "calcs": [],
+              "displayMode": "list",
+              "placement": "right",
+              "showLegend": false
+            },
+            "orientation": "auto",
+            "showValue": "never",
+            "stacking": "none",
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "single",
+              "sort": "none"
+            },
+            "xTickLabelRotation": 0,
+            "xTickLabelSpacing": 0
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "WITH bucketed AS (\n  SELECT\n    CASE\n      WHEN latency_ms IS NULL THEN 'unknown'\n      WHEN latency_ms < 500          THEN '< 500ms'\n      WHEN latency_ms < 1000         THEN '500–999ms'\n      WHEN latency_ms < 2000         THEN '1–1.9s'\n      WHEN latency_ms < 5000         THEN '2–4.9s'\n      ELSE                             '>= 5s'\n    END AS latency_bucket,\n    CASE\n      WHEN latency_ms IS NULL THEN 99\n      WHEN latency_ms < 500          THEN 1\n      WHEN latency_ms < 1000         THEN 2\n      WHEN latency_ms < 2000         THEN 3\n      WHEN latency_ms < 5000         THEN 4\n      ELSE                             5\n    END AS bucket_order\n  FROM app.runs\n  WHERE\n    $__timeFilter(occurred_at)\n    AND provider_key IN (${provider})\n    AND model_id IN (${model})\n    AND (\n      CASE\n        WHEN is_stream THEN 'Streaming'\n        ELSE 'Non-streaming'\n      END\n      IN (${endpoint})\n    )\n    AND latency_ms IS NOT NULL\n)\nSELECT\n  latency_bucket,\n  COUNT(*) AS runs\nFROM bucketed\nGROUP BY\n  latency_bucket,\n  bucket_order\nORDER BY\n  bucket_order;\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Latency Distribution",
+          "type": "barchart"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "Avg Latency (ms)",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "auto",
+                "showValues": false,
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 0,
+            "y": 13
+          },
+          "id": 22,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "displayMode": "table",
+              "placement": "right",
+              "showLegend": true,
+              "sortBy": "Name",
+              "sortDesc": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  date_trunc('${bucket}', occurred_at) AS time,\n  AVG(latency_ms) AS avg_latency_ms\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  )\n  AND latency_ms IS NOT NULL\nGROUP BY\n  time\nORDER BY\n  time;\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Latency Over Time",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "Avg Latency (ms)",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "auto",
+                "showValues": false,
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 8,
+            "y": 13
+          },
+          "id": 23,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "displayMode": "table",
+              "placement": "right",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  date_trunc('${bucket}', occurred_at) AS time,\n  AVG(ttft_ms) AS avg_ttft_ms\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  )\n  AND ttft_ms IS NOT NULL\nGROUP BY\n  time\nORDER BY\n  time;\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "TTFT Over Time",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "Avg Latency (ms)",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "auto",
+                "showValues": false,
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 8,
+            "x": 16,
+            "y": 13
+          },
+          "id": 26,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "displayMode": "table",
+              "placement": "right",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  date_trunc('${bucket}', occurred_at) AS time,\n  AVG(tokens_per_second) AS avg_ttft_ms\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  )\n  AND tokens_per_second IS NOT NULL\nGROUP BY\n  time\nORDER BY\n  time;\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "TPS Over Time",
+          "type": "timeseries"
+        }
+      ],
+      "title": "Performance (Latency & Throughput)",
+      "type": "row"
+    },
+    {
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "id": 27,
+      "panels": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "barWidthFactor": 0.6,
+                "drawStyle": "line",
+                "fillOpacity": 0,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "insertNulls": false,
+                "lineInterpolation": "smooth",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "showPoints": "auto",
+                "showValues": false,
+                "spanNulls": false,
+                "stacking": {
+                  "group": "A",
+                  "mode": "none"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 1
+          },
+          "id": 28,
+          "options": {
+            "legend": {
+              "calcs": [
+                "lastNotNull"
+              ],
+              "displayMode": "table",
+              "placement": "right",
+              "showLegend": true
+            },
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "single",
+              "sort": "none"
+            }
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  date_trunc('${bucket}', occurred_at) AS time,\n  SUM(CASE WHEN status <> 'ok' THEN 1 ELSE 0 END) AS error_runs,\n  ROUND(\n    100.0 * SUM(CASE WHEN status <> 'ok' THEN 1 ELSE 0 END)\n    / NULLIF(COUNT(*), 0),\n    2\n  ) AS error_rate_pct\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  )\nGROUP BY\n  time\nORDER BY\n  time;\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Error Rate Over Time",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "app-postgres"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "axisBorderShow": false,
+                "axisCenteredZero": false,
+                "axisColorMode": "text",
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "fillOpacity": 80,
+                "gradientMode": "none",
+                "hideFrom": {
+                  "legend": false,
+                  "tooltip": false,
+                  "viz": false
+                },
+                "lineWidth": 1,
+                "scaleDistribution": {
+                  "type": "linear"
+                },
+                "thresholdsStyle": {
+                  "mode": "off"
+                }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": 0
+                  },
+                  {
+                    "color": "red",
+                    "value": 80
+                  }
+                ]
+              },
+              "unit": "short"
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 1
+          },
+          "id": 29,
+          "options": {
+            "barRadius": 0,
+            "barWidth": 0.97,
+            "fullHighlight": false,
+            "groupWidth": 0.7,
+            "legend": {
+              "calcs": [],
+              "displayMode": "list",
+              "placement": "right",
+              "showLegend": false
+            },
+            "orientation": "horizontal",
+            "showValue": "never",
+            "stacking": "none",
+            "tooltip": {
+              "hideZeros": false,
+              "mode": "single",
+              "sort": "none"
+            },
+            "xTickLabelRotation": 0,
+            "xTickLabelSpacing": 0
+          },
+          "pluginVersion": "12.2.0",
+          "targets": [
+            {
+              "dataset": "app",
+              "datasource": {
+                "type": "grafana-postgresql-datasource",
+                "uid": "app-postgres"
+              },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  COALESCE(error_type, 'UNKNOWN') AS error_type,\n  COUNT(*) AS error_count\nFROM app.runs\nWHERE\n  $__timeFilter(occurred_at)\n  AND provider_key IN (${provider})\n  AND model_id IN (${model})\n  AND (\n    CASE\n      WHEN is_stream THEN 'Streaming'\n      ELSE 'Non-streaming'\n    END\n    IN (${endpoint})\n  )\n  AND status <> 'ok'\nGROUP BY\n  COALESCE(error_type, 'UNKNOWN')\nORDER BY\n  error_count DESC;\n",
+              "refId": "A",
+              "sql": {
+                "columns": [
+                  {
+                    "parameters": [],
+                    "type": "function"
+                  }
+                ],
+                "groupBy": [
+                  {
+                    "property": {
+                      "type": "string"
+                    },
+                    "type": "groupBy"
+                  }
+                ],
+                "limit": 50
+              }
+            }
+          ],
+          "title": "Errors by Type",
+          "type": "barchart"
+        }
+      ],
+      "title": "Errors",
+      "type": "row"
+    }
+  ],
+  "preload": false,
+  "schemaVersion": 42,
+  "tags": [],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "app-postgres"
+        },
+        "definition": "SELECT DISTINCT provider_key\nFROM app.runs\nORDER BY provider_key;",
+        "description": "LLM Provider (OpenAI, Google, etc)",
+        "includeAll": true,
+        "label": "Provider",
+        "multi": true,
+        "name": "provider",
+        "options": [],
+        "query": "SELECT DISTINCT provider_key\nFROM app.runs\nORDER BY provider_key;",
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "app-postgres"
+        },
+        "definition": "select distinct model_id from app.runs",
+        "description": "LLM Model (gpt, llama, qwen. etc)",
+        "includeAll": true,
+        "label": "Model",
+        "multi": true,
+        "name": "model",
+        "options": [],
+        "query": "select distinct model_id from app.runs",
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "allValue": "'Streaming','Non-streaming'",
+        "current": {
+          "text": "All",
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "app-postgres"
+        },
+        "definition": "SELECT 'Streaming' AS label\nUNION ALL\nSELECT 'Non-streaming' AS label\nORDER BY label",
+        "description": "Streaming options (derived from ttft. streaming or non-streaming)",
+        "includeAll": true,
+        "label": "Endpoint",
+        "multi": true,
+        "name": "endpoint",
+        "options": [],
+        "query": "SELECT 'Streaming' AS label\nUNION ALL\nSELECT 'Non-streaming' AS label\nORDER BY label",
+        "refresh": 1,
+        "regex": "",
+        "type": "query"
+      },
+      {
+        "current": {
+          "text": "day",
+          "value": "day"
+        },
+        "description": "",
+        "label": "Time bucket",
+        "name": "bucket",
+        "options": [
+          {
+            "selected": false,
+            "text": "hour",
+            "value": "hour"
+          },
+          {
+            "selected": true,
+            "text": "day",
+            "value": "day"
+          },
+          {
+            "selected": false,
+            "text": "week",
+            "value": "week"
+          }
+        ],
+        "query": "hour, day, week",
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "PEP Historical Analytics",
+  "uid": "adfxf45",
+  "version": 63
+}

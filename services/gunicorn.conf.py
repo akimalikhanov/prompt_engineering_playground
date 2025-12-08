@@ -1,7 +1,7 @@
 import multiprocessing
 
 bind = "0.0.0.0:8000"
-workers = 4
+workers = 2
 preload_app = False
 wsgi_app = "api.main:app"
 worker_class = "uvicorn.workers.UvicornWorker"
