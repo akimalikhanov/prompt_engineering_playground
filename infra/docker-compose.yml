@@ -55,7 +55,7 @@ services:
   mlflow:
     build:
       context: ..
-      dockerfile: ./infra/Dockerfile.mlflow
+      dockerfile: ./docker_images/Dockerfile.mlflow
     container_name: mlflow-server
     depends_on:
       postgres:
@@ -71,6 +71,9 @@ services:
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
       AWS_DEFAULT_REGION: us-east-1
+      # Allow API/other containers to reach MLflow without host-header 403s
+      # For tighter security, replace '*' with an explicit comma-separated allowlist
+      MLFLOW_SERVER_ALLOWED_HOSTS: "*"
     command:
       - sh
       - -lc
@@ -84,6 +87,50 @@ services:
     ports:
       - "${MLFLOW_PORT}:${MLFLOW_PORT}"
     restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: ./infra/docker_images/Dockerfile.base
+      target: api
+    container_name: api-server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+      mlflow:
+        condition: service_started
+    env_file: ../.env
+    ports:
+      - "${API_PORT}:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  ui:
+    build:
+      context: ..
+      dockerfile: ./infra/docker_images/Dockerfile.base
+      target: ui
+    container_name: ui-server
+    depends_on:
+      api:
+        condition: service_started
+    env_file: ../.env
+    ports:
+      - "${UI_PORT}:7860"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.140.1
@@ -199,7 +246,7 @@ services:
       - ../.env
     entrypoint: ["/bin/sh", "/pgbouncer-entrypoint.sh"]
     volumes:
-      - ./pgbouncer-entrypoint.sh:/pgbouncer-entrypoint.sh:ro
+      - ./shell_scripts/pgbouncer-entrypoint.sh:/pgbouncer-entrypoint.sh:ro
     restart: unless-stopped
 
 

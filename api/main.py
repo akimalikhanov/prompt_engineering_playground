@@ -64,7 +64,15 @@ os.environ.setdefault("MLFLOW_TRACE_LOG_MODEL_INFERENCES", "false")
 
 os.environ.setdefault('MLFLOW_LOG_LEVEL', 'INFO')
 
-mlflow.set_tracking_uri(f"http://localhost:{os.getenv('MLFLOW_PORT')}")
+# Allow MLFLOW_TRACKING_URI to be set via environment variable (for Docker)
+# Otherwise, construct from MLFLOW_PORT (for local development)
+mlflow_host= os.getenv('MLFLOW_HOST')
+mlflow_port= os.getenv('MLFLOW_PORT')
+if mlflow_host:
+    mlflow_tracking_uri = f"http://{mlflow_host}:{mlflow_port}"
+else:
+    mlflow_tracking_uri = f"http://localhost:{mlflow_port}"
+mlflow.set_tracking_uri(mlflow_tracking_uri)
 mlflow.set_experiment("pep-playground")
 mlflow.openai.autolog()
 

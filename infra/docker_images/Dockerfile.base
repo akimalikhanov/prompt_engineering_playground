@@ -1,0 +1,97 @@
+# ============================================
+# Base stage: system deps + core Python deps
+# ============================================
+FROM python:3.12-slim AS base
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# System dependencies (adjust if you need more)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+RUN pip install --no-cache-dir uv
+
+# Copy project metadata
+COPY pyproject.toml ./pyproject.toml
+COPY uv.lock ./uv.lock
+
+# Install ONLY base deps from [project].dependencies
+# - no dev group
+# - no other dependency-groups (api/ui/providers-*)
+RUN uv sync --no-dev --no-default-groups --frozen
+
+# Make sure we use the project venv
+ENV PATH="/app/.venv/bin:${PATH}"
+
+# Copy shared code (used by both API and UI)
+COPY utils/ ./utils/
+COPY config/ ./config/
+COPY schemas/ ./schemas/
+
+# Allow top-level imports like "import utils"
+ENV PYTHONPATH=/app
+
+
+# ============================================
+# API stage: Backend service
+# ============================================
+FROM base AS api
+
+WORKDIR /app
+
+# Install API-specific groups on top of base:
+# - api            : FastAPI, gunicorn, SQLAlchemy, etc.
+# - providers-api  : openai, google-genai
+# (NO dev, NO ui, NO providers-local here by default)
+RUN uv sync --no-dev --no-default-groups --frozen \
+    --group api \
+    --group providers-api
+    # If this container should also run local vLLM, add:
+    # --group providers-local
+
+# Copy backend-specific code
+COPY api/ ./api/
+COPY services/ ./services/
+COPY adapters/ ./adapters/
+COPY models/ ./models/
+
+EXPOSE 8000
+
+# Run with gunicorn (adjust module path if needed)
+CMD ["gunicorn", "-c", "services/gunicorn.conf.py"]
+
+
+# ============================================
+# UI stage: Frontend/Gradio service
+# ============================================
+FROM base AS ui
+
+WORKDIR /app
+
+# Install UI-specific groups on top of base:
+# - ui            : gradio, httpx
+# - providers-api : openai, google-genai (for calling API LLMs)
+# (NO dev, NO api, NO providers-local)
+RUN uv sync --no-dev --no-default-groups --frozen \
+    --group ui \
+    --group providers-api
+
+# Copy frontend-specific code
+COPY ui/ ./ui/
+COPY services/ ./services/
+
+EXPOSE 7860
+
+# Let UI talk to API via Docker service name (in docker-compose)
+ENV BACKEND_URL=http://api:8000
+
+# Run Gradio app
+CMD ["python", "-m", "ui.app"]

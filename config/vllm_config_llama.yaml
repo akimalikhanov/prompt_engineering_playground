@@ -1,6 +1,6 @@
 # config.yaml
 
-model: "./storage/llama3.1-8b-awq"
+model: "hugging-quants/Meta-Llama-3.1-8B-Instruct-AWQ-INT4"
 host: "0.0.0.0"
 port: 8002
 max_model_len: 4096

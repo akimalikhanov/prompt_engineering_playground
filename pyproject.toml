@@ -1,34 +1,47 @@
 [project]
-name = "prompt-eng-playground"
+name = "prompt-engineering-playground"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "alembic>=1.17.0",
-    "google-genai>=1.32.0",
-    "gradio>=5.47.1",
-    "gunicorn>=23.0.0",
-    "huggingface-hub[cli]>=0.34.4",
-    "ipykernel>=7.1.0",
     "jinja2>=3.1.6",
-    "mlflow-tracing>=3.4.0",
-    "openai>=1.102.0",
-    "opentelemetry-api>=1.37.0",
-    "opentelemetry-exporter-otlp>=1.37.0",
-    "opentelemetry-exporter-otlp-proto-grpc>=1.37.0",
-    "opentelemetry-exporter-otlp-proto-http>=1.37.0",
-    "opentelemetry-instrumentation>=0.58b0",
-    "opentelemetry-instrumentation-asgi>=0.58b0",
-    "opentelemetry-instrumentation-fastapi>=0.58b0",
-    "opentelemetry-instrumentation-httpx>=0.58b0",
-    "opentelemetry-instrumentation-requests>=0.58b0",
-    "opentelemetry-sdk>=1.37.0",
-    "psycopg2-binary>=2.9.11",
-    "python-dotenv>=1.1.1",
+    "opentelemetry-api>=1.39.0",
+    "opentelemetry-exporter-otlp>=1.39.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.39.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.39.0",
+    "opentelemetry-instrumentation>=0.60b0",
+    "opentelemetry-instrumentation-httpx>=0.60b0",
+    "opentelemetry-instrumentation-requests>=0.60b0",
+    "opentelemetry-sdk>=1.39.0",
+    "python-dotenv>=1.2.1",
     "requests>=2.32.5",
-    "sqlalchemy>=2.0.44",
-    "vllm[auto,torch-backend]>=0.10.2",
 ]
 
-# vllm[torch-backend,auto]
+[dependency-groups]
+api = [
+    "alembic>=1.17.0",
+    "fastapi>=0.124.2",
+    "gunicorn>=23.0.0",
+    "mlflow-tracing>=3.4.0",
+    "opentelemetry-instrumentation-asgi>=0.58b0",
+    "opentelemetry-instrumentation-fastapi>=0.58b0",
+    "psycopg2-binary>=2.9.11",
+    "sqlalchemy>=2.0.44",
+    "uvicorn[standard]>=0.38.0",
+]
+dev = [
+    "ipykernel>=7.1.0",
+]
+providers-api = [
+    "google-genai>=1.32.0",
+    "openai>=1.102.0",
+]
+providers-local = [
+    "huggingface-hub[cli]>=0.34.4",
+    "vllm[auto,torch-backend]>=0.10.2",
+]
+ui = [
+    "gradio==5.47.1",
+    "httpx>=0.28.1",
+]
