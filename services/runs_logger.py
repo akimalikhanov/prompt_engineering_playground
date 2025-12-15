@@ -162,6 +162,7 @@ def log_run(
     prompt_tokens: Optional[int] = None,
     completion_tokens: Optional[int] = None,
     total_tokens: Optional[int] = None,
+    reasoning_tokens: Optional[int] = None,
     cost_usd: Optional[float] = None,
     latency_ms: Optional[int] = None,
     ttft_ms: Optional[int] = None,
@@ -226,6 +227,8 @@ def log_run(
             completion_tokens = metrics.get("completion_tokens")
         if total_tokens is None:
             total_tokens = metrics.get("total_tokens")
+        if reasoning_tokens is None:
+            reasoning_tokens = metrics.get("reasoning_tokens")
         if cost_usd is None:
             cost_usd = metrics.get("cost_usd")
         if latency_ms is None:
@@ -267,6 +270,7 @@ def log_run(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
+            reasoning_tokens=reasoning_tokens,
             cost_usd=cost_usd,
             latency_ms=latency_ms,
             ttft_ms=ttft_ms,

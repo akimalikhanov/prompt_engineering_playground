@@ -30,3 +30,4 @@ docs/
 api/main_with_logging.py
 verify_loki.sh
 run_prompts_api.sh
+Dockerfile.based

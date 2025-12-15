@@ -5,7 +5,7 @@ from utils.errors import (_get_status_code, \
                     prettify_openai_error, \
                     BackendError)
 from utils.retry import call_with_retry
-from utils.load_configs import _load_models_config
+from utils.load_configs import _load_models_config, expand_env_var
 import time
 import logging
 
@@ -85,7 +85,10 @@ def route_call(
     # Determine base_url and model
     if provider_id == 'vllm':
         server_config = model_config['server']
-        base_url = f"http://{server_config['host']}:{server_config['port']}{server_config['base_path']}"
+        # Expand environment variables in server config
+        host = expand_env_var(server_config['host'])
+        port = expand_env_var(server_config['port'])
+        base_url = f"http://{host}:{port}{server_config['base_path']}"
         model_name = model_config['model_path']
         api_key = "dummy"
     else:

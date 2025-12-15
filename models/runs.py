@@ -31,7 +31,7 @@ class Run(Base):
     prompt_tokens = Column(Integer)
     completion_tokens = Column(Integer)
     total_tokens = Column(Integer)
-    reasoning_tokens = Column(Integer, Computed("total_tokens - coalesce(prompt_tokens, 0) - coalesce(completion_tokens, 0)"))  # Generated column: total_tokens - (prompt_tokens + completion_tokens)
+    reasoning_tokens = Column(Integer)
     cost_usd = Column(Numeric(12, 6))
     
     latency_ms = Column(Integer)

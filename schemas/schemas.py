@@ -117,6 +117,7 @@ class Metrics(BaseModel):
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
+    reasoning_tokens: Optional[int] = None
     tokens_per_second: Optional[float] = None
     cost_usd: Optional[float] = None
     session_id: Optional[str] = None

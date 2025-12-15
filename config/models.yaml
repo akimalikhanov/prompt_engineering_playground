@@ -25,26 +25,64 @@ defaults:
 
 models:
   # === Cloud adapters ===
-  - id: gpt                   # matches your --model_id choices
-    label: "OpenAI GPT-4o"
+  - id: gpt-5.2                  # matches your --model_id choices
+    label: "OpenAI GPT-5.2"
     provider: openai
-    model_name: "gpt-4o"
+    model_name: "gpt-5.2"
     pricing:
       currency: USD
       unit: per_1k_tokens
-      input: ${GPT_INPUT_PRICE:-0.00250}
-      output: ${GPT_OUTPUT_PRICE:-0.01000}
+      input: ${GPT5_2_INPUT_PRICE:-0.00175}
+      output: ${GPT5_2_OUTPUT_PRICE:-0.01400}
       cached_input: null
       cached_output: null
       rounding: exact
-      effective: 2025-05-13    # date when full GPT-4o API price was announced (approx) :contentReference[oaicite:3]{index=3}
-      notes: "OpenAI list price for full GPT-4o: $2.50 per 1M input, $10.00 per 1M output tokens"
+      effective: 2025-12-11
+      notes: "OpenAI GPT-5.2 standard-tier pricing (per 1M: $1.75 in, $14 out)."
     capabilities:
       streaming: true
       tool_calling: true
     params_override: {}       # keep empty to use defaults
 
-  - id: gpt-mini              # matches your --model_id choices
+  - id: gpt-5-mini              # matches your --model_id choices
+    label: "OpenAI GPT-5-mini"
+    provider: openai
+    model_name: "gpt-5-mini"
+    pricing:
+      currency: USD
+      unit: per_1k_tokens
+      input: ${GPT5_MINI_INPUT_PRICE:-0.00025}
+      output: ${GPT5_MINI_OUTPUT_PRICE:-0.00200}
+      cached_input: null          # set if OpenAI exposes cheaper cached input
+      cached_output: null         # likewise
+      rounding: exact             # you can choose ceil_1k / nearest_1k / exact
+      effective: 2025-12-11
+      notes: "OpenAI GPT-5-mini standard-tier pricing (per 1M: $0.25 in, $2 out)."
+    capabilities:
+      streaming: true
+      tool_calling: true
+    params_override: {temperature: 1.0}       # keep empty to use defaults
+
+  - id: gpt-5-nano              # ultra-cheap background / batch jobs
+    label: "OpenAI GPT-5-nano"
+    provider: openai
+    model_name: "gpt-5-nano"
+    pricing:
+      currency: USD
+      unit: per_1k_tokens
+      input: ${GPT5_NANO_INPUT_PRICE:-0.00005}
+      output: ${GPT5_NANO_OUTPUT_PRICE:-0.00040}
+      cached_input: null
+      cached_output: null
+      rounding: exact
+      effective: 2025-12-11
+      notes: "OpenAI GPT-5-nano standard-tier pricing (per 1M: $0.05 in, $0.40 out)."
+    capabilities:
+      streaming: true
+      tool_calling: true
+    params_override: {temperature: 1.0}
+    
+  - id: gpt-4o-mini              # matches your --model_id choices
     label: "OpenAI GPT-4o-mini"
     provider: openai
     model_name: "gpt-4o-mini"
@@ -130,10 +168,10 @@ models:
   - id: llama
     label: "Llama3.1-8B-Instruct-AWQ"
     provider: vllm
-    model_path: "./storage/llama3.1-8b-awq"  # your local HF path or name
+    model_path: "hugging-quants/Meta-Llama-3.1-8B-Instruct-AWQ-INT4"  # your local HF path or name
     server:
-      host: "0.0.0.0"
-      port: 8002                                # was vllm_dict['llama']['port']
+      host: "${LLAMA_SERVER_HOST}"
+      port: "${LLAMA_SERVER_PORT:-8002}"           # was vllm_dict['llama']['port']
       base_path: "/v1"                          # router will format http://host:port/base_path
     pricing:
       currency: USD
@@ -150,8 +188,8 @@ models:
     provider: vllm
     model_path: "Qwen/Qwen2.5-7B-Instruct-AWQ"  # your local HF path or name
     server:
-      host: "0.0.0.0"
-      port: 8001                                # was vllm_dict['qwen']['port']
+      host: "${QWEN_SERVER_HOST}"
+      port: "${QWEN_SERVER_PORT:-8001}"           # was vllm_dict['qwen']['port']
       base_path: "/v1"
     pricing:
       currency: USD

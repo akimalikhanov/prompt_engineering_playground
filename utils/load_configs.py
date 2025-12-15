@@ -1,10 +1,69 @@
 import yaml
+import re
 from functools import lru_cache
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Union
 import os
 
 # Get the project root (parent of utils directory)
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def expand_env_var(value: Any, return_type: Optional[type] = None) -> Union[str, int, float, Any]:
+    """
+    Expand environment variable syntax like ${VAR:-default} in a value.
+    
+    Args:
+        value: The value to expand. Can be a string with ${VAR:-default} syntax, or any other type.
+        return_type: Optional type to convert the result to (int, float, or None for string/auto).
+                    If None, will auto-detect: try int, then float, otherwise keep as string.
+    
+    Returns:
+        The expanded value, converted to the requested type if possible.
+    
+    Examples:
+        expand_env_var("${PORT:-8000}") -> 8000 (int)
+        expand_env_var("${PRICE:-0.5}", return_type=float) -> 0.5
+        expand_env_var("${HOST:-localhost}") -> "localhost" (string)
+        expand_env_var(123) -> 123 (unchanged)
+    """
+    if not isinstance(value, str):
+        return value
+    
+    # Match ${VAR:-default} or ${VAR} pattern
+    pattern = r'\$\{([^:}]+)(?::-([^}]*))?\}'
+    
+    def replacer(match):
+        var_name = match.group(1)
+        default = match.group(2) if match.group(2) is not None else ''
+        return os.getenv(var_name, default)
+    
+    expanded = re.sub(pattern, replacer, value)
+    
+    # If no pattern was found, return original value
+    if expanded == value and not re.search(pattern, value):
+        # No env var pattern found, but might still need type conversion
+        if return_type is not None:
+            try:
+                return return_type(expanded)
+            except (ValueError, TypeError):
+                return expanded
+        return expanded
+    
+    # Type conversion
+    if return_type is not None:
+        try:
+            return return_type(expanded)
+        except (ValueError, TypeError):
+            return expanded
+    
+    # Auto-detect type: try int, then float, otherwise keep as string
+    try:
+        return int(expanded)
+    except ValueError:
+        try:
+            return float(expanded)
+        except ValueError:
+            return expanded
 
 
 def _load_models_config():

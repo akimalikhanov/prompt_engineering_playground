@@ -4,9 +4,9 @@ model: "Qwen/Qwen2.5-7B-Instruct-AWQ"
 host: "0.0.0.0"
 port: 8001
 max_model_len: 4096
-max_num_seqs: 2
+max_num_seqs: 4
 max_num_batched_tokens: 1600 # ≤ max_num_seqs * max_model_len
-gpu_memory_utilization: 0.4
+gpu_memory_utilization: 0.75
 # kv-cache-dtype: fp8
 quantization: awq_marlin
 dtype: half

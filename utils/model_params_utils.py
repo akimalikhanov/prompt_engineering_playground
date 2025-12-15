@@ -34,12 +34,13 @@ def _get_model_special_behavior(model_id: str) -> Dict[str, Any]:
     """
     special_behaviors: Dict[str, Dict[str, Any]] = {}
     
-    # Special handling for o4-mini: temperature must be 1.0 and cannot be changed
-    if model_id == "gpt-o4-mini":
+    # Special handling for models that only support default temperature=1.0
+    # Note: `model_id` is the registry id from config/models.yaml (not the provider `model_name`).
+    if model_id in {"gpt-o4-mini", "gpt-5-mini", "gpt-5-nano"}:
         special_behaviors["temperature"] = {
             "value": 1.0,
             "interactive": False,
-            "label": "Temperature (fixed at 1.0 for o4-mini)"
+            "label": "Temperature (fixed at 1.0 for this model)"
         }
     
     return special_behaviors

@@ -26,15 +26,18 @@ COPY uv.lock ./uv.lock
 # Install ONLY base deps from [project].dependencies
 # - no dev group
 # - no other dependency-groups (api/ui/providers-*)
-RUN uv sync --no-dev --no-default-groups --frozen
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-dev --no-default-groups --frozen
 
 # Make sure we use the project venv
+# So python, uv, pip etc. now refer to the project venv, not system Python.
 ENV PATH="/app/.venv/bin:${PATH}"
 
 # Copy shared code (used by both API and UI)
 COPY utils/ ./utils/
 COPY config/ ./config/
 COPY schemas/ ./schemas/
+COPY services/ ./services/
 
 # Allow top-level imports like "import utils"
 ENV PYTHONPATH=/app
@@ -51,7 +54,8 @@ WORKDIR /app
 # - api            : FastAPI, gunicorn, SQLAlchemy, etc.
 # - providers-api  : openai, google-genai
 # (NO dev, NO ui, NO providers-local here by default)
-RUN uv sync --no-dev --no-default-groups --frozen \
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-dev --no-default-groups --frozen \
     --group api \
     --group providers-api
     # If this container should also run local vLLM, add:
@@ -59,7 +63,6 @@ RUN uv sync --no-dev --no-default-groups --frozen \
 
 # Copy backend-specific code
 COPY api/ ./api/
-COPY services/ ./services/
 COPY adapters/ ./adapters/
 COPY models/ ./models/
 
@@ -80,13 +83,13 @@ WORKDIR /app
 # - ui            : gradio, httpx
 # - providers-api : openai, google-genai (for calling API LLMs)
 # (NO dev, NO api, NO providers-local)
-RUN uv sync --no-dev --no-default-groups --frozen \
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-dev --no-default-groups --frozen \
     --group ui \
     --group providers-api
 
 # Copy frontend-specific code
 COPY ui/ ./ui/
-COPY services/ ./services/
 
 EXPOSE 7860
 

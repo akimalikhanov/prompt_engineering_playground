@@ -55,7 +55,7 @@ services:
   mlflow:
     build:
       context: ..
-      dockerfile: ./docker_images/Dockerfile.mlflow
+      dockerfile: infra/docker_images/Dockerfile.mlflow
     container_name: mlflow-server
     depends_on:
       postgres:
@@ -91,7 +91,7 @@ services:
   api:
     build:
       context: ..
-      dockerfile: ./infra/docker_images/Dockerfile.base
+      dockerfile: infra/docker_images/Dockerfile.base
       target: api
     container_name: api-server
     depends_on:
@@ -102,6 +102,7 @@ services:
       mlflow:
         condition: service_started
     env_file: ../.env
+    extra_hosts: ["host.docker.internal:host-gateway"]
     ports:
       - "${API_PORT}:8000"
     restart: unless-stopped
@@ -115,7 +116,7 @@ services:
   ui:
     build:
       context: ..
-      dockerfile: ./infra/docker_images/Dockerfile.base
+      dockerfile: infra/docker_images/Dockerfile.base
       target: ui
     container_name: ui-server
     depends_on:

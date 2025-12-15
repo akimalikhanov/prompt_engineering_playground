@@ -90,8 +90,7 @@ CREATE TABLE IF NOT EXISTS app.runs (
   prompt_tokens     INTEGER,
   completion_tokens INTEGER,
   total_tokens      INTEGER,
-  reasoning_tokens  INTEGER GENERATED ALWAYS AS
-                     (total_tokens - coalesce(prompt_tokens, 0) - coalesce(completion_tokens, 0)) STORED,
+  reasoning_tokens  INTEGER,
   cost_usd          NUMERIC(12,6),
 
   latency_ms        INTEGER,

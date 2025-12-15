@@ -203,14 +203,18 @@ def _is_o4_model(model: str) -> bool:
     return model.startswith("o4") or "o4-mini" in model
 
 
-def _is_o_series_model(model: str) -> bool:
-    return model.startswith("o") and (
-        "-mini" in model or model.startswith(("o1", "o3", "o4"))
-    )
+def _uses_max_completion_tokens(model: str) -> bool:
+    # Some newer OpenAI models reject `max_tokens` and require `max_completion_tokens`.
+    # Keep this check narrowly scoped to avoid changing other model capability logic.
+    return (model.startswith("o") and ("-mini" in model or model.startswith(("o1", "o3", "o4")))) or model.startswith("gpt-5")
 
 
 def _supports_seed(model: str) -> bool:
-    return (not _is_o_series_model(model)) and ("gemini" not in model)
+    # Keep seed behavior based on o-series detection (not max_completion_tokens usage).
+    is_o_series = model.startswith("o") and (
+        "-mini" in model or model.startswith(("o1", "o3", "o4"))
+    )
+    return (not is_o_series) and ("gemini" not in model)
 
 
 def _normalize_response_format(response_format):
@@ -481,7 +485,7 @@ def _unified_openai_api_call(
         "stream": stream,
     }
     
-    if _is_o_series_model(model):
+    if _uses_max_completion_tokens(model):
         kwargs["max_completion_tokens"] = params.get("max_tokens")
     else:
         kwargs["max_tokens"] = params.get("max_tokens")
@@ -763,29 +767,52 @@ def _unified_openai_api_call(
 
     def _lookup_pricing(model_id: str, prompt_tokens: int, completion_tokens: int) -> float:
         """Compute USD cost for a given model and token usage."""
-        def _get_env_value(value):
-            """Parse env var reference like ${VAR:-default} or return value as-is."""
-            if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
-                # Extract ${VAR:-default} pattern
-                inner = value[2:-1]
-                if ":-" in inner:
-                    var_name, default = inner.split(":-", 1)
-                    return float(os.getenv(var_name, default))
-                else:
-                    # ${VAR} without default
-                    return float(os.getenv(inner, "0.0"))
-            return float(value) if value is not None else 0.0
+        from utils.load_configs import expand_env_var
         
         cfg = _load_models_config()
         for m in cfg.get("models", []):
             if m.get("id") == model_id or m.get("model_name") == model_id:
                 pricing = m.get("pricing", {})
-                in_rate = _get_env_value(pricing.get("input", 0.0))   # $ per 1k prompt tokens
-                out_rate = _get_env_value(pricing.get("output", 0.0)) # $ per 1k completion tokens
+                # Expand env vars and convert to float for pricing calculations
+                in_rate = expand_env_var(pricing.get("input", 0.0), return_type=float)   # $ per 1k prompt tokens
+                out_rate = expand_env_var(pricing.get("output", 0.0), return_type=float) # $ per 1k completion tokens
                 cost = (prompt_tokens or 0) * in_rate / 1000.0 \
                     + (completion_tokens or 0) * out_rate / 1000.0
                 return round(cost, 6)
         return None  # model not found
+
+    def _extract_reasoning_tokens(usage_obj) -> Optional[int]:
+        """Best-effort extraction of reasoning tokens from usage object."""
+        if not usage_obj:
+            return None
+        # 1) Direct attribute
+        reasoning = getattr(usage_obj, "reasoning_tokens", None)
+        # 2) Nested in completion_tokens_details
+        if reasoning is None:
+            details = getattr(usage_obj, "completion_tokens_details", None)
+            if details is not None:
+                if isinstance(details, dict):
+                    reasoning = details.get("reasoning_tokens")
+                else:
+                    reasoning = getattr(details, "reasoning_tokens", None)
+        # 3) Derive from totals if available
+        if reasoning is None:
+            total = getattr(usage_obj, "total_tokens", None)
+            prompt = getattr(usage_obj, "prompt_tokens", None)
+            completion = getattr(usage_obj, "completion_tokens", None)
+            if (
+                total is not None
+                and prompt is not None
+                and completion is not None
+            ):
+                try:
+                    reasoning = total - prompt - completion
+                    if reasoning < 0:
+                        reasoning = 0
+                except Exception:
+                    reasoning = None
+        return reasoning
+
 
     def _update_usage_totals(usage_obj, totals, accumulate=False):
         """
@@ -799,6 +826,7 @@ def _unified_openai_api_call(
         """
         if not usage_obj:
             return
+
         for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
             value = getattr(usage_obj, key, 0) or 0
             if value:
@@ -807,11 +835,19 @@ def _unified_openai_api_call(
                 else:
                     # Replace: use the latest value (handles duplicate chunks from same API call)
                     totals[key] = value
+        # Handle reasoning tokens (explicit or derived)
+        reasoning_val = _extract_reasoning_tokens(usage_obj)
+        if reasoning_val is not None:
+            if accumulate:
+                totals["reasoning_tokens"] = (totals.get("reasoning_tokens") or 0) + reasoning_val
+            else:
+                totals["reasoning_tokens"] = reasoning_val
 
     def _build_metrics_payload(ttft, latency, chunk_count, usage_totals, text_length=None):
         prompt_tokens = usage_totals["prompt_tokens"]
         completion_tokens = usage_totals["completion_tokens"]
         total_tokens = usage_totals["total_tokens"]
+        reasoning_tokens = usage_totals.get("reasoning_tokens")
         cost_usd = _lookup_pricing(model, prompt_tokens, completion_tokens)
         
         # For Gemini models, adjust token count using character-to-token ratio
@@ -841,6 +877,7 @@ def _unified_openai_api_call(
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
+            "reasoning_tokens": reasoning_tokens,
             "tokens_per_chunk": (
                 round((completion_tokens or 0) / (chunk_count or 1), 3)
                 if completion_tokens is not None
@@ -862,6 +899,7 @@ def _unified_openai_api_call(
                     "prompt_tokens": None,
                     "completion_tokens": None,
                     "total_tokens": None,
+                    "reasoning_tokens": None,
                 }
 
                 try:
@@ -912,6 +950,7 @@ def _unified_openai_api_call(
                 "prompt_tokens": None,
                 "completion_tokens": None,
                 "total_tokens": None,
+                "reasoning_tokens": None,
             }
 
             try:
@@ -966,6 +1005,7 @@ def _unified_openai_api_call(
     prompt_tokens_total = 0
     completion_tokens_total = 0
     total_tokens_total = 0
+    reasoning_tokens_total = None
     executed_tools = []  # Track which tools were executed
     iteration_count = 0
     recent_tool_calls = []  # Track recent tool calls for loop detection
@@ -986,6 +1026,11 @@ def _unified_openai_api_call(
                 prompt_tokens_total += getattr(usage, "prompt_tokens", 0) or 0
                 completion_tokens_total += getattr(usage, "completion_tokens", 0) or 0
                 total_tokens_total += getattr(usage, "total_tokens", 0) or 0
+                reasoning_val = _extract_reasoning_tokens(usage)
+                if reasoning_val is not None:
+                    if reasoning_tokens_total is None:
+                        reasoning_tokens_total = 0
+                    reasoning_tokens_total += reasoning_val
             except Exception:
                 pass
 
@@ -1128,6 +1173,21 @@ def _unified_openai_api_call(
         if effective_completion_tokens is not None and total is not None and total > 0:
             tokens_per_second = round(effective_completion_tokens / total, 2)
 
+        # Reasoning tokens: prefer explicit from provider; otherwise derive
+        reasoning_tokens_final = reasoning_tokens_total
+        if reasoning_tokens_final is None:
+            if (
+                total_tokens_total is not None
+                and prompt_tokens_total is not None
+                and completion_tokens_total is not None
+            ):
+                try:
+                    reasoning_tokens_final = total_tokens_total - prompt_tokens_total - completion_tokens_total
+                    if reasoning_tokens_final < 0:
+                        reasoning_tokens_final = 0
+                except Exception:
+                    reasoning_tokens_final = None
+
         metrics_payload = {
             "ttft_ms": None,  # not meaningful for non-streaming
             "latency_ms": round(total * 1000, 1),
@@ -1135,6 +1195,7 @@ def _unified_openai_api_call(
             "prompt_tokens": prompt_tokens_total or None,
             "completion_tokens": completion_tokens_total or None,
             "total_tokens": total_tokens_total or None,
+            "reasoning_tokens": reasoning_tokens_final,
             "tokens_per_second": tokens_per_second,
             "cost_usd": cost_usd,
             "executed_tools": executed_tools if executed_tools else None,
