@@ -60,19 +60,22 @@ def route_call(
     if model_config['provider'] != provider_id:
         raise ValueError(f"Provider ID '{provider_id}' does not match model '{model_id}' provider '{model_config['provider']}'")
     
-    # Merge default parameters with provided parameters
-    merged_params = _models_config['defaults']['params'].copy()
-    merged_params.update(params)
+    # Merge parameters: defaults -> model overrides -> request params (request wins)
+    # IMPORTANT: request params that are null/None should NOT override defaults.
+    merged_params = _models_config["defaults"]["params"].copy()
+    if "params_override" in model_config:
+        merged_params.update(model_config["params_override"])
+
+    request_params = params or {}
+    if isinstance(request_params, dict):
+        request_params = {k: v for k, v in request_params.items() if v is not None}
+    merged_params.update(request_params)
 
     # Tools are currently supported only for non-streaming calls.
     # tools = merged_params.get("tools")
     # if tools and stream:
     #    raise ValueError("Tools/functions are only supported for non-streaming calls. "
     #                     "Use the /chat endpoint (non-stream) when tools are enabled.")
-    
-    # Apply model-specific parameter overrides if any
-    if 'params_override' in model_config:
-        merged_params.update(model_config['params_override'])
     
     # Resolve base_url and api_key per provider and forward through openai_adapter
     providers = _models_config['providers']

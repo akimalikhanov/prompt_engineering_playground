@@ -36,11 +36,11 @@ def _get_model_special_behavior(model_id: str) -> Dict[str, Any]:
     
     # Special handling for models that only support default temperature=1.0
     # Note: `model_id` is the registry id from config/models.yaml (not the provider `model_name`).
-    if model_id in {"gpt-o4-mini", "gpt-5-mini", "gpt-5-nano"}:
+    if model_id in {"gpt-o4-mini", "gpt-5-mini", "gpt-5-nano", "gpt-5.2"}:
         special_behaviors["temperature"] = {
             "value": 1.0,
             "interactive": False,
-            "label": "Temperature (fixed at 1.0 for this model)"
+            "label": "Temperature (fixed at 1 for this model)"
         }
     
     return special_behaviors
@@ -95,6 +95,41 @@ def _get_param_values_for_model(
     # Seed
     seed_value = effective.get("seed", defaults.get("seed"))
     params["seed"] = {"value": str(seed_value) if seed_value is not None else ""}
-    
+
+    # Reasoning effort and verbosity (only visible for GPT-5 family)
+    gpt5_models = {"gpt-5.2", "gpt-5-mini", "gpt-5-nano"}
+    is_gpt5 = model_id in gpt5_models if model_id else False
+
+    # Reasoning choices depend on model support
+    if model_id == "gpt-5.2":
+        reasoning_choices = ["none", "low", "medium", "high"]
+    elif model_id in {"gpt-5-mini", "gpt-5-nano"}:
+        reasoning_choices = ["minimal", "low", "medium", "high"]
+    else:
+        reasoning_choices = ["none", "minimal", "low", "medium", "high"]
+
+    reasoning_effort_value = effective.get("reasoning_effort", defaults.get("reasoning_effort"))
+    # Only set default for GPT-5 models; keep None for others to avoid sending unsupported params
+    if reasoning_effort_value is None and is_gpt5:
+        reasoning_effort_value = "low"
+    if reasoning_effort_value is not None and reasoning_effort_value not in reasoning_choices:
+        reasoning_effort_value = reasoning_choices[0]
+    params["reasoning_effort"] = {
+        "value": reasoning_effort_value,
+        "interactive": True,
+        "visible": is_gpt5,
+        "choices": reasoning_choices,
+    }
+
+    verbosity_value = effective.get("verbosity", defaults.get("verbosity"))
+    # Only set default for GPT-5 models; keep None for others to avoid sending unsupported params
+    if verbosity_value is None and is_gpt5:
+        verbosity_value = "low"
+    params["verbosity"] = {
+        "value": verbosity_value,
+        "interactive": True,
+        "visible": is_gpt5,
+    }
+
     return params
 

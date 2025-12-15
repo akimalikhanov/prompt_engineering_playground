@@ -21,6 +21,8 @@ defaults:
     top_p: 1.0
     max_tokens: 512
     seed: null
+    reasoning_effort: null
+    verbosity: null
   stream: true
 
 models:
@@ -42,7 +44,7 @@ models:
     capabilities:
       streaming: true
       tool_calling: true
-    params_override: {}       # keep empty to use defaults
+    params_override: {temperature: 1.0, max_tokens: 2000}       # keep empty to use defaults
 
   - id: gpt-5-mini              # matches your --model_id choices
     label: "OpenAI GPT-5-mini"
@@ -61,7 +63,7 @@ models:
     capabilities:
       streaming: true
       tool_calling: true
-    params_override: {temperature: 1.0}       # keep empty to use defaults
+    params_override: {temperature: 1.0, reasoning_effort: low, max_tokens: 2000}       # keep empty to use defaults
 
   - id: gpt-5-nano              # ultra-cheap background / batch jobs
     label: "OpenAI GPT-5-nano"
@@ -80,7 +82,7 @@ models:
     capabilities:
       streaming: true
       tool_calling: true
-    params_override: {temperature: 1.0}
+    params_override: {temperature: 1.0, reasoning_effort: low, max_tokens: 2000}
     
   - id: gpt-4o-mini              # matches your --model_id choices
     label: "OpenAI GPT-4o-mini"

@@ -7,19 +7,32 @@ def _render_badge(label: str, value: Optional[str]) -> str:
 
 
 def _format_tokens(metrics: Dict[str, Any]) -> Optional[str]:
+    """Format token counts as: total (in prompt, out completion, reason reasoning)."""
     prompt = metrics.get("prompt_tokens")
     completion = metrics.get("completion_tokens")
+    reasoning = metrics.get("reasoning_tokens")
     total = metrics.get("total_tokens")
     if prompt is None and completion is None and total is None:
         return None
-    parts = []
-    if prompt is not None or completion is not None:
-        prompt_val = prompt if prompt is not None else "?"
-        completion_val = completion if completion is not None else "?"
-        parts.append(f"{prompt_val}/{completion_val}")
-    if total is not None:
-        parts.append(f"({total})")
-    return " ".join(parts) if parts else str(total)
+    
+    # Build the breakdown parts
+    breakdown_parts = []
+    if prompt is not None:
+        breakdown_parts.append(f"in {prompt}")
+    if completion is not None:
+        breakdown_parts.append(f"out {completion}")
+    if reasoning is not None:
+        breakdown_parts.append(f"r {reasoning}")
+    
+    # Format: total (in X, out Y, reason Z) or just total if no breakdown available
+    if breakdown_parts:
+        breakdown_str = " | ".join(breakdown_parts)
+        if total is not None:
+            return f"{total} ({breakdown_str})"
+        return f"({breakdown_str})"
+    
+    # Fallback: just show total if available
+    return str(total) if total is not None else None
 
 
 def _format_cost(metrics: Dict[str, Any]) -> Optional[str]:

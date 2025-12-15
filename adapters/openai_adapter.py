@@ -363,6 +363,7 @@ def _unified_openai_api_call(
             ttft_ms=metrics_payload.get("ttft_ms"),
             prompt_tokens=metrics_payload.get("prompt_tokens"),
             completion_tokens=metrics_payload.get("completion_tokens"),
+            reasoning_tokens=metrics_payload.get("reasoning_tokens"),
             tokens_per_second=metrics_payload.get("tokens_per_second"),
             cost_usd=metrics_payload.get("cost_usd"),
             extra_fields=_extra_fields(merged_extra),
@@ -493,6 +494,14 @@ def _unified_openai_api_call(
     if _supports_seed(model):
         kwargs["seed"] = params.get("seed")
     
+    reasoning_effort = params.get("reasoning_effort")
+    if reasoning_effort is not None:
+        kwargs["reasoning_effort"] = reasoning_effort
+
+    verbosity = params.get("verbosity")
+    if verbosity is not None:
+        kwargs["verbosity"] = verbosity
+
     response_format = _normalize_response_format(params.get("response_format"))
     if response_format is not None:
         kwargs["response_format"] = response_format

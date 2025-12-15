@@ -101,9 +101,10 @@ def stream_chat(
     top_p: float,
     max_tokens: int,
     seed_input: Optional[str],
+    reasoning_effort: Optional[str],
+    verbosity: Optional[str],
     system_prompt: Optional[str],
     context_prompt: Optional[str],
-    api_base_url: str,
     response_mode: str,
     strict_schema: bool,
     schema_code: Optional[str],
@@ -204,7 +205,7 @@ def stream_chat(
 
     payload_messages = _build_messages(user_message, sanitized_history, system_prompt, context_prompt)
 
-    api_url = (api_base_url or DEFAULT_API_BASE_URL).strip()
+    api_url = DEFAULT_API_BASE_URL.strip()
     if not api_url:
         api_url = DEFAULT_API_BASE_URL
     endpoint_url = f"{api_url.rstrip('/')}{endpoint_cfg['path']}"
@@ -218,6 +219,12 @@ def stream_chat(
     seed_value = _coerce_seed(seed_input)
     if seed_value is not None:
         params["seed"] = seed_value
+
+    # Add reasoning_effort and verbosity for GPT-5 models
+    if reasoning_effort and reasoning_effort.strip():
+        params["reasoning_effort"] = reasoning_effort
+    if verbosity and verbosity.strip():
+        params["verbosity"] = verbosity
 
     # Handle response_format (skip for Gemini when tools are enabled)
     schema_template_label = _normalize_selection(schema_template) if schema_template else None
@@ -522,6 +529,20 @@ def stream_chat(
                     running_history.append({"role": "assistant", "content": str(text) if text else "⚠️ Empty response body."})
                 else:
                     running_history.append({"role": "assistant", "content": "⚠️ Empty response body."})
+
+                # Warn if reasoning tokens likely consumed the budget leaving no visible output
+                if metrics.get("reasoning_tokens", 0) > 0:
+                    content = running_history[-1].get("content", "") if running_history else ""
+                    if not str(content).strip():
+                        warning_msg = (
+                            "⚠️ All available tokens were used for reasoning, so no visible answer was returned. "
+                            "Try increasing max tokens or lowering reasoning_effort."
+                        )
+                        warning_entry = {"role": "assistant", "content": warning_msg, "likeable": False}
+                        if running_history and running_history[-1].get("role") == "assistant":
+                            running_history[-1] = warning_entry
+                        else:
+                            running_history.append(warning_entry)
                 
                 # Update session_state if session_id is in metrics
                 session_state_out = _update_session_from_metrics(metrics, session_state_out)
@@ -626,6 +647,10 @@ def stream_chat(
     # If last message is user (first chunk), append new assistant message
     # If last message is a tool_status message, append new assistant message to preserve tool message
     # Otherwise (subsequent chunks), update existing assistant message
+    # If no visible response, insert a placeholder to keep history valid for retries
+    if not (accumulated_response or "").strip():
+        accumulated_response = "<no response>"
+
     if running_history:
         last_msg = running_history[-1]
         is_tool_status = last_msg.get("content", "").startswith("🔧")
@@ -638,6 +663,18 @@ def stream_chat(
                 running_history[-1] = {"role": "assistant", "content": accumulated_response}
     else:
         running_history.append({"role": "assistant", "content": accumulated_response})
+
+    # Warn if reasoning tokens likely consumed the budget leaving no visible output
+    if metrics.get("reasoning_tokens", 0) > 0 and not (accumulated_response or "").strip():
+        warning_msg = (
+            "⚠️ All available tokens were used for reasoning, so no visible answer was returned. "
+            "Try increasing max tokens or lowering reasoning_effort."
+        )
+        warning_entry = {"role": "assistant", "content": warning_msg, "likeable": False}
+        if running_history and running_history[-1].get("role") == "assistant":
+            running_history[-1] = warning_entry
+        else:
+            running_history.append(warning_entry)
     yield running_history, format_metrics_badges(metrics, ttft_ms, final_latency), session_state_out
 
 
@@ -696,7 +733,8 @@ def update_params_for_model(model_choice: Any):
     
     Returns:
         Tuple of gr.update() calls for all parameter UI components in order:
-        (temperature_slider, top_p_slider, max_tokens_slider, seed_textbox)
+        (temperature_slider, top_p_slider, max_tokens_slider, seed_textbox,
+         reasoning_effort_dropdown, verbosity_dropdown)
     """
     normalized_choice = _normalize_selection(model_choice)
     params = _get_param_values_for_model(normalized_choice, MODELS_DATA, MODEL_LOOKUP)
@@ -706,13 +744,45 @@ def update_params_for_model(model_choice: Any):
         gr.update(value=params["top_p"]["value"]),
         gr.update(value=params["max_tokens"]["value"]),
         gr.update(value=params["seed"]["value"]),
+        gr.update(
+            value=params["reasoning_effort"]["value"],
+            visible=params["reasoning_effort"]["visible"],
+            choices=params["reasoning_effort"].get("choices"),
+        ),
+        gr.update(
+            value=params["verbosity"]["value"],
+            visible=params["verbosity"]["visible"],
+        ),
     )
 
 
-def fetch_prompts(api_base_url: str):
+def _generation_help_text(model_choice: Any) -> str:
+    """Return Generation tab help text, including GPT-5-only options when applicable."""
+    normalized_choice = _normalize_selection(model_choice)
+    is_gpt5 = normalized_choice.startswith("gpt-5") if normalized_choice else False
+
+    base_text = (
+        "### ⚙️ Generation\n"
+        "Fine-tune how the model produces text:\n\n"
+        "- **Temperature** – controls creativity (lower is more focused, higher is more diverse).\n"
+        "- **Top‑p (nucleus)** – limits sampling to the most probable tokens for steadier output.\n"
+        "- **Max tokens** – caps the response length.\n"
+        "- **Seed** – optionally set to make results more reproducible with the same inputs and parameters.\n"
+    )
+
+    if is_gpt5:
+        base_text += (
+        "- **Reasoning effort** – controls how much deliberate thinking the model uses (higher improves logic but increases cost/latency).\n"
+        "- **Verbosity** – controls how detailed the response is (low = concise, high = more explanation and context).\n"
+        )
+
+    return base_text
+
+
+def fetch_prompts():
     """Fetch prompts from the API."""
     try:
-        api_url = resolve_api_base(api_base_url, DEFAULT_API_BASE_URL)
+        api_url = DEFAULT_API_BASE_URL
         prompts = list_prompts(api_url)
         
         # Create choices for dropdown: (label, prompt_id)
@@ -793,7 +863,7 @@ def _normalize_statements_selection(selection: Any) -> List[str]:
 
 
 
-def paste_template_to_input(rendered_json: str, prompt_id: str = None, api_base_url: str = None):
+def paste_template_to_input(rendered_json: str, prompt_id: str = None):
     """Parse the rendered JSON and distribute messages to appropriate fields.
     
     - System messages -> system_prompt_box
@@ -819,7 +889,7 @@ def paste_template_to_input(rendered_json: str, prompt_id: str = None, api_base_
         
         if prompt_id:
             try:
-                api_url = resolve_api_base(api_base_url, DEFAULT_API_BASE_URL)
+                api_url = DEFAULT_API_BASE_URL
                 prompt = get_prompt(api_url, prompt_id)
                 response_mode, schema_code = extract_response_format_from_prompt(prompt)
             except Exception:
@@ -916,26 +986,31 @@ def build_demo() -> gr.Blocks:
                             value=DEFAULT_ENDPOINT_KEY,
                         )
 
-                    with gr.Accordion("API settings", open=False):
-                        api_base_box = gr.Textbox(
-                            label="API base URL",
-                            value=DEFAULT_API_BASE_URL,
-                            placeholder="http://localhost:8000",
-                            elem_classes=["scroll-text"],
-                        )
                         # Wire the chatbot like/dislike control now that we know API base input.
                         # NOTE: In Gradio 5.x, inputs come first, then gr.LikeData is
                         # auto-injected based on the type hint (not position).
                         def _like_handler(
                             history: List[Dict[str, Any]],
-                            api_base_url: Optional[str],
                             session: Optional[Dict[str, Any]],
                             evt: gr.LikeData,
                         ) -> List[Dict[str, Any]]:
+                            # Skip feedback only on the targeted message if it's a warning
+                            idx = getattr(evt, "index", None)
+                            if (
+                                idx is not None
+                                and 0 <= idx < len(history)
+                                and isinstance(history[idx], dict)
+                            ):
+                                msg = history[idx]
+                                content = str(msg.get("content") or "").strip()
+                                likeable = msg.get("likeable")
+                                if likeable is False or content.startswith("⚠️"):
+                                    return history
+
                             return _on_like_event(
                                 evt,
                                 history,
-                                api_base_url,
+                                DEFAULT_API_BASE_URL,
                                 session,
                                 default_api_base_url=DEFAULT_API_BASE_URL,
                                 logger=ui_logger,
@@ -943,7 +1018,7 @@ def build_demo() -> gr.Blocks:
 
                         chatbot.like(
                             _like_handler,
-                            inputs=[chatbot, api_base_box, session_state],
+                            inputs=[chatbot, session_state],
                             outputs=[chatbot],
                         )
 
@@ -951,13 +1026,8 @@ def build_demo() -> gr.Blocks:
                     with gr.Tabs():
                         # --- Generation tab ------------------------------------
                         with gr.Tab("Generation"):
-                            gr.Markdown(
-                                "### ⚙️ Generation\n"
-                                "Fine-tune how the model produces text:\n\n"
-                                "- **Temperature** – controls creativity (lower is more focused, higher is more diverse).\n"
-                                "- **Top‑p (nucleus)** – limits sampling to the most probable tokens for steadier output.\n"
-                                "- **Max tokens** – caps the response length.\n"
-                                "- **Seed** – optionally set to make results more reproducible with the same inputs and parameters.\n"
+                            generation_help_md = gr.Markdown(
+                                _generation_help_text(DEFAULT_MODEL_ID)
                             )
                             with gr.Row():
                                 # Initialize parameters based on default model (merge defaults with params_override)
@@ -993,6 +1063,21 @@ def build_demo() -> gr.Blocks:
                                     placeholder="e.g. 42",
                                     value=initial_params["seed"]["value"],
                                     elem_classes=["scroll-text"],
+                                )
+
+                            with gr.Row():
+                                reasoning_effort_dd = gr.Dropdown(
+                                    label="Reasoning effort (GPT-5 models only)",
+                                    choices=initial_params["reasoning_effort"]["choices"],
+                                    value=initial_params["reasoning_effort"]["value"],
+                                    visible=initial_params["reasoning_effort"]["visible"],
+                                )
+                                
+                                verbosity_dd = gr.Dropdown(
+                                    label="Verbosity (GPT-5 models only)",
+                                    choices=["low", "medium", "high"],
+                                    value=initial_params["verbosity"]["value"],
+                                    visible=initial_params["verbosity"]["visible"],
                                 )
 
                             # --- Structured output (response_format) ------------
@@ -1261,7 +1346,7 @@ def build_demo() -> gr.Blocks:
                             )
                             
                             # --- Functions for Simple/Advanced behavior -----------
-                            def load_prompt_details_and_simple_fields(prompt_id: str, api_base_url: str):
+                            def load_prompt_details_and_simple_fields(prompt_id: str):
                                 """Load prompt details, JSON defaults, and configure simple-mode fields."""
                                 if not prompt_id:
                                     # Reset UI to defaults - clear all variable fields
@@ -1281,7 +1366,7 @@ def build_demo() -> gr.Blocks:
                                     return tuple(reset_updates)
                                 
                                 try:
-                                    api_url = resolve_api_base(api_base_url, DEFAULT_API_BASE_URL)
+                                    api_url = DEFAULT_API_BASE_URL
                                     prompt = get_prompt(api_url, prompt_id)
                                     description_text, defaults_json = format_prompt_details(prompt)
                                     # Build examples text for context
@@ -1371,17 +1456,12 @@ def build_demo() -> gr.Blocks:
                                 is_advanced: bool,
                                 variables_json_str: str,
                                 context_text: str,
-                                *var_inputs_and_api,  # Accept variable name/value pairs + api_base_url as varargs
+                                *var_inputs,  # Accept variable name/value pairs + statements selector
                             ):
                                 """Render, building variables from simple fields if not advanced."""
                                 try:
-                                    # Last arguments: statements selector value, api_base_url
-                                    api_base_url = DEFAULT_API_BASE_URL
+                                    # Last argument: statements selector value
                                     statements_selection_raw: Any = []
-                                    var_inputs = var_inputs_and_api
-                                    if var_inputs_and_api:
-                                        api_base_url = var_inputs_and_api[-1]
-                                        var_inputs = var_inputs_and_api[:-1]
                                     if var_inputs:
                                         statements_selection_raw = var_inputs[-1]
                                         var_inputs = var_inputs[:-1]
@@ -1390,7 +1470,7 @@ def build_demo() -> gr.Blocks:
                                         if not is_advanced else []
                                     )
                                     
-                                    api_url = resolve_api_base(api_base_url, DEFAULT_API_BASE_URL)
+                                    api_url = DEFAULT_API_BASE_URL
                                     if is_advanced:
                                         # Use JSON as-is
                                         try:
@@ -1470,7 +1550,7 @@ def build_demo() -> gr.Blocks:
                             
                             prompt_dropdown.change(
                                 load_prompt_details_and_simple_fields,
-                                inputs=[prompt_dropdown, api_base_box],
+                                inputs=[prompt_dropdown],
                                 outputs=prompt_outputs,
                                 queue=False,
                             )
@@ -1493,7 +1573,6 @@ def build_demo() -> gr.Blocks:
                             for i in range(MAX_VARIABLES):
                                 render_inputs.extend([var_name_hidden_list[i], var_value_tb_list[i]])
                             render_inputs.append(statements_selector)
-                            render_inputs.append(api_base_box)
                             
                             render_btn.click(
                                 render_template_with_modes,
@@ -1504,7 +1583,7 @@ def build_demo() -> gr.Blocks:
                             
                             paste_btn.click(
                                 paste_template_to_input,
-                                inputs=[rendered_json_hidden, prompt_dropdown, api_base_box],
+                                inputs=[rendered_json_hidden, prompt_dropdown],
                                 outputs=[system_prompt_box, user_input, response_mode_dd, schema_code],
                                 queue=False,
                             )
@@ -1586,9 +1665,10 @@ def build_demo() -> gr.Blocks:
             top_p_slider,
             max_tokens_slider,
             seed_text,
+            reasoning_effort_dd,
+            verbosity_dd,
             system_prompt_box,
             context_box,
-            api_base_box,
             response_mode_dd,
             strict_ckb,
             schema_code,
@@ -1620,7 +1700,14 @@ def build_demo() -> gr.Blocks:
         model_dropdown.change(
             update_params_for_model,
             inputs=[model_dropdown],
-            outputs=[temperature_slider, top_p_slider, max_tokens_slider, seed_text],
+            outputs=[temperature_slider, top_p_slider, max_tokens_slider, seed_text, reasoning_effort_dd, verbosity_dd],
+            queue=False,
+        )
+
+        model_dropdown.change(
+            lambda m: gr.update(value=_generation_help_text(m)),
+            inputs=[model_dropdown],
+            outputs=[generation_help_md],
             queue=False,
         )
 
@@ -1646,12 +1733,12 @@ def build_demo() -> gr.Blocks:
                 # Re-enable endpoint selection, don't modify system prompt
                 return gr.update(interactive=True), gr.update()
 
-        def sync_tools_with_prompt_selection(prompt_id: str, api_base_url: str, current_system_prompt: str):
+        def sync_tools_with_prompt_selection(prompt_id: str, current_system_prompt: str):
             """Auto-enable tools for prompts that declare tool usage."""
             if not prompt_id:
                 return gr.update(), gr.update(), gr.update(), False
             try:
-                api_url = resolve_api_base(api_base_url, DEFAULT_API_BASE_URL)
+                api_url = DEFAULT_API_BASE_URL
                 prompt = get_prompt(api_url, prompt_id)
             except Exception:
                 return gr.update(), gr.update(), gr.update(), False
@@ -1685,7 +1772,7 @@ def build_demo() -> gr.Blocks:
         
         prompt_dropdown.change(
             sync_tools_with_prompt_selection,
-            inputs=[prompt_dropdown, api_base_box, system_prompt_box],
+            inputs=[prompt_dropdown, system_prompt_box],
             outputs=[enable_tools_ckb, endpoint_dropdown, system_prompt_box, tool_prompt_override_state],
             queue=False,
         )
@@ -1693,7 +1780,7 @@ def build_demo() -> gr.Blocks:
         # Automatically load prompts when the demo loads
         demo.load(
             fetch_prompts,
-            inputs=[api_base_box],
+            inputs=[],
             outputs=[prompt_dropdown],
             queue=False,
         )

@@ -26,6 +26,7 @@ logs/
 test_prompts.txt
 
 experiments/
+tests/test_reasoning.py
 docs/
 api/main_with_logging.py
 verify_loki.sh

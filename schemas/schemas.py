@@ -64,10 +64,12 @@ class ChatMessage(BaseModel):
 
 class ChatParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    temperature: Optional[Annotated[float, Field(ge=0.0, le=2.0)]] = 0.7
-    top_p: Optional[Annotated[float, Field(ge=0.0, le=1.0)]] = 1.0
-    max_tokens: Optional[Annotated[int, Field(ge=1, le=4000)]] = 512
+    temperature: Optional[Annotated[float, Field(ge=0.0, le=2.0)]] = None
+    top_p: Optional[Annotated[float, Field(ge=0.0, le=1.0)]] = None
+    max_tokens: Optional[Annotated[int, Field(ge=1, le=4000)]] = None
     seed: Optional[Annotated[int, Field(ge=0, le=2_147_483_647)]] = None
+    reasoning_effort: Optional[Literal["none", "minimal", "low", "medium", "high"]] = None
+    verbosity: Optional[Literal["low", "medium", "high"]] = None
     response_format: Optional[ResponseFormat] = None
     # Optional tool / function-calling configuration (OpenAI-style)
     tools: Optional[List[ToolDefinition]] = None
