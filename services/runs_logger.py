@@ -18,8 +18,8 @@ from models.runs import Run
 load_dotenv()
 
 # Database connection
-DB_HOST = os.getenv("PGB_APP_DB_HOST", "localhost")
-DB_PORT = os.getenv("PGB_APP_DB_PORT", "5433")
+DB_HOST = os.getenv("PGB_APP_DB_HOST")
+DB_PORT = os.getenv("PGB_APP_DB_PORT")
 DB_NAME = os.getenv("APP_DB", "app")
 DB_USER = os.getenv("APP_DB_USER", "app_user")
 DB_PASSWORD = os.getenv("APP_DB_PASSWORD")

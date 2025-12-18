@@ -12,29 +12,29 @@ distributor:
           endpoint: 0.0.0.0:4317
 
 ingester:
-  trace_idle_period: 10s
+  trace_idle_period: 30s
   max_block_bytes: 1500000
-  max_block_duration: 30s  # Reduced for faster S3 flushing in dev
+  max_block_duration: 2m  # Reduced for faster S3 flushing in dev
   lifecycler:
     ring:
       kvstore:
         store: memberlist
       replication_factor: 1
 
-metrics_generator:
-  registry:
-    external_labels:
-      source: tempo
-      cluster: docker-compose
-  storage:
-    path: /tmp/tempo/generator/wal
-  ring:
-    kvstore:
-      store: memberlist
+# metrics_generator:
+#   registry:
+#     external_labels:
+#       source: tempo
+#       cluster: docker-compose
+#   storage:
+#     path: /tmp/tempo/generator/wal
+#   ring:
+#     kvstore:
+#       store: memberlist
 
 compactor:
   compaction:
-    block_retention: 48h # full retention, no compaction. TODO: change to 24h in production
+    block_retention: 24h # full retention, no compaction. TODO: change to 24h in production
 
 storage:
   trace:

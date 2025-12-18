@@ -32,7 +32,9 @@ exporters:
     endpoint: http://loki:3100/otlp
 
 extensions:
-  health_check: {}
+  health_check:
+    # Explicitly bind to all interfaces so other containers can reach it
+    endpoint: 0.0.0.0:13133
 
 service:
   extensions: [health_check]
