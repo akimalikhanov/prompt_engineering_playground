@@ -1,14 +1,14 @@
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 def _build_messages(
     user_message: str,
-    history: List[Dict[str, str]],
-    system_prompt: Optional[str],
-    context_prompt: Optional[str],
-) -> List[Dict[str, str]]:
-    messages: List[Dict[str, str]] = []
+    history: list[dict[str, str]],
+    system_prompt: str | None,
+    context_prompt: str | None,
+) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
     if system_prompt and system_prompt.strip():
         messages.append({"role": "system", "content": system_prompt.strip()})
     if context_prompt and context_prompt.strip():
@@ -19,7 +19,7 @@ def _build_messages(
     return messages
 
 
-def _coerce_seed(seed_text: Optional[str]) -> Optional[int]:
+def _coerce_seed(seed_text: str | None) -> int | None:
     if seed_text is None:
         return None
     if isinstance(seed_text, (int, float)):
@@ -41,12 +41,12 @@ def _coerce_seed(seed_text: Optional[str]) -> Optional[int]:
 def _build_response_format(
     mode: str,
     strict: bool,
-    schema_code: Optional[str],
-    schema_template_label: Optional[str] = None,
-    response_schema_templates: Optional[Dict[str, Dict[str, Any]]] = None,
-) -> Optional[Dict[str, Any]]:
+    schema_code: str | None,
+    schema_template_label: str | None = None,
+    response_schema_templates: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
     """Build response_format dict from UI inputs.
-    
+
     Expected structure for json_schema type:
     {
         "type": "json_schema",
@@ -56,7 +56,7 @@ def _build_response_format(
             "name": "SchemaName"  # Required by OpenAI
         }
     }
-    
+
     Args:
         mode: Response format mode ("None", "JSON object", "JSON schema")
         strict: Whether to use strict schema validation
@@ -66,10 +66,10 @@ def _build_response_format(
     """
     if mode == "None" or not mode:
         return None
-    
+
     if mode == "JSON object":
         return {"type": "json_object"}
-    
+
     if mode == "JSON schema":
         if not schema_code or not schema_code.strip():
             return None
@@ -77,20 +77,24 @@ def _build_response_format(
             # Parse and validate the JSON schema
             schema_text = schema_code.strip()
             json_schema_dict = json.loads(schema_text)
-            
+
             # Validate it's actually a dict/object
             if not isinstance(json_schema_dict, dict):
                 print(f"⚠️ JSON schema must be an object, got: {type(json_schema_dict)}")
                 return None
-            
+
             # Extract schema name from template if available
             schema_name = None
-            if response_schema_templates and schema_template_label and schema_template_label != "Custom...":
+            if (
+                response_schema_templates
+                and schema_template_label
+                and schema_template_label != "Custom..."
+            ):
                 template = response_schema_templates.get(schema_template_label)
                 if template:
                     json_schema_config = template.get("json_schema", {})
                     schema_name = json_schema_config.get("name")
-            
+
             # Build json_schema structure - name is required by OpenAI
             # Use template name if available, otherwise default to "CustomSchema"
             json_schema_obj = {
@@ -98,7 +102,7 @@ def _build_response_format(
                 "strict": strict,
                 "name": schema_name if schema_name else "CustomSchema",  # Required by OpenAI API
             }
-            
+
             # Wrap in the expected structure
             return {
                 "type": "json_schema",
@@ -110,11 +114,11 @@ def _build_response_format(
             print(error_msg)
             # Still return None to skip invalid schema
             return None
-    
+
     return None
 
 
-def _normalize_selection(value: Any) -> Optional[str]:
+def _normalize_selection(value: Any) -> str | None:
     if isinstance(value, str):
         return value
     if isinstance(value, dict):
@@ -124,11 +128,11 @@ def _normalize_selection(value: Any) -> Optional[str]:
     return None
 
 
-def split_rendered_messages_for_ui(rendered_messages: List[Dict[str, Any]]) -> Dict[str, str]:
+def split_rendered_messages_for_ui(rendered_messages: list[dict[str, Any]]) -> dict[str, str]:
     """Split rendered messages into UI fields: system, user, extras (other roles)."""
-    system_messages: List[str] = []
-    user_messages: List[str] = []
-    other_messages: List[str] = []
+    system_messages: list[str] = []
+    user_messages: list[str] = []
+    other_messages: list[str] = []
 
     for msg in rendered_messages:
         if not isinstance(msg, dict):
@@ -145,7 +149,7 @@ def split_rendered_messages_for_ui(rendered_messages: List[Dict[str, Any]]) -> D
             other_messages.append(f"[{role.upper()}]\n{content}")
 
     system_text = "\n\n".join(system_messages) if system_messages else ""
-    user_parts: List[str] = []
+    user_parts: list[str] = []
     if other_messages:
         user_parts.extend(other_messages)
     if user_messages:
@@ -156,5 +160,3 @@ def split_rendered_messages_for_ui(rendered_messages: List[Dict[str, Any]]) -> D
         "system_text": system_text,
         "user_text": user_text,
     }
-
-

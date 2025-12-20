@@ -1,5 +1,3 @@
-import multiprocessing
-
 bind = "0.0.0.0:8000"
 workers = 4
 preload_app = False
@@ -11,5 +9,3 @@ errorlog = "-"
 timeout = 120
 graceful_timeout = 30
 keepalive = 5
-
-

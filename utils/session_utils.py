@@ -1,16 +1,15 @@
-import logging
 import os
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 INACTIVITY_TIMEOUT = int(os.getenv("INACTIVITY_TIMEOUT", 15))  # minutes
 SESSION_TIMEOUT_SECONDS = INACTIVITY_TIMEOUT * 60
 
 
 def _ensure_session_state(
-    session_state: Optional[Dict[str, Any]],
-) -> Tuple[str, Dict[str, Any], bool, bool]:
+    session_state: dict[str, Any] | None,
+) -> tuple[str, dict[str, Any], bool, bool]:
     """
     Ensure there is a valid session state and enforce inactivity timeout.
 
@@ -50,9 +49,9 @@ def _ensure_session_state(
 
 
 def _update_session_from_metrics(
-    metrics: Dict[str, Any],
-    session_state_out: Dict[str, Any],
-) -> Dict[str, Any]:
+    metrics: dict[str, Any],
+    session_state_out: dict[str, Any],
+) -> dict[str, Any]:
     """
     Update session_state from session_id (and related tracking fields) in metrics if present.
     """
@@ -63,13 +62,10 @@ def _update_session_from_metrics(
 
 
 def _record_trace_id_from_metrics(
-    history: List[Dict[str, Any]],
-    metrics: Dict[str, Any],
-    session_state_out: Optional[Dict[str, Any]] = None,
-    *,
-    logger: Optional["logging.Logger"] = None,
-    source: str = "unknown",
-) -> List[Dict[str, Any]]:
+    history: list[dict[str, Any]],
+    metrics: dict[str, Any],
+    session_state_out: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """
     Record the trace_id from metrics into session_state's trace_map for the latest
     assistant message. We return history unchanged for backwards compatibility.
@@ -86,34 +82,16 @@ def _record_trace_id_from_metrics(
 
     trace_map = session_state_out.setdefault("trace_map", {})
 
-    def _record(idx: int, msg: Dict[str, Any], reason: str) -> None:
-        content = str(msg.get("content", ""))
+    def _record(idx: int) -> None:
         trace_map[idx] = trace_id
-        # log.info(
-        #     "trace_map_recorded",
-        #     extra={
-        #         "event": "trace_map_recorded",
-        #         "source": source,
-        #         "trace_id": trace_id,
-        #         "history_len": len(history),
-        #         "selected_index": idx,
-        #         "selected_role": msg.get("role"),
-        #         "content_preview": content[:120],
-        #         "reason": reason,
-        #     },
-        # )
 
-    assigned_any = False
     for idx in range(len(history) - 1, -1, -1):
         msg = history[idx]
         if msg.get("role") != "assistant":
             continue
         if trace_map.get(idx):
             continue  # keep existing mapping
-        content = str(msg.get("content", ""))
-        reason = "assistant_tool_status" if content.startswith("🔧") else "assistant_non_tool"
-        _record(idx, msg, reason=reason)
-        assigned_any = True
+        _record(idx)
 
     # if not assigned_any:
     #     log.info(
@@ -127,5 +105,3 @@ def _record_trace_id_from_metrics(
     #     )
 
     return history
-
-

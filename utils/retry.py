@@ -1,20 +1,25 @@
-from typing import Callable, Optional
 import logging
-import uuid
 import random
 import time
-from utils.errors import (_get_status_code, \
-                    is_transient_error, \
-                    prettify_openai_error, \
-                    _get_retry_after_seconds)
+import uuid
+from collections.abc import Callable
+from typing import Any
+
+from utils.errors import (
+    _get_retry_after_seconds,
+    _get_status_code,
+    is_transient_error,
+    prettify_openai_error,
+)
 from utils.logger_new import get_correlation_id, set_correlation_id
+
 
 def compute_backoff_seconds(
     attempt: int,
     base_delay: float = 0.5,
     max_delay: float = 8.0,
     jitter_max: float = 0.5,
-    server_retry_after: Optional[float] = None,
+    server_retry_after: float | None = None,
 ) -> float:
     """Exponential backoff with jitter; respects Retry-After if larger."""
     backoff = min(base_delay * (2 ** (attempt - 1)), max_delay)
@@ -24,15 +29,16 @@ def compute_backoff_seconds(
         delay = max(delay, float(server_retry_after))
     return delay
 
+
 def call_with_retry(
-    fn: Callable[[], any],
+    fn: Callable[[], Any],
     *,
     max_retries: int = 3,
     base_delay: float = 0.5,
     max_delay: float = 8.0,
     jitter_max: float = 0.5,
-    logger: Optional[logging.Logger] = None,
-    corr_id: Optional[str] = None,
+    logger: logging.Logger | None = None,
+    corr_id: str | None = None,
 ):
     """
     Wrap a call with transient-error retries. Returns fn() result or raises the original error.

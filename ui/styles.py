@@ -105,4 +105,3 @@ NOTE_CSS = """
     font-weight: 500;
 }
 """
-

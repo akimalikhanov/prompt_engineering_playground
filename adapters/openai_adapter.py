@@ -1,25 +1,39 @@
+import contextlib
+import json
 import logging
-import os, time, json, uuid
-from typing import Generator, Optional, Literal, Union, List, Dict, Any
+import os
+import time
+import uuid
+from collections.abc import Generator
 from dataclasses import dataclass
+from typing import Any, Literal, cast
 
 import openai
 
 from services.llm_tools import get_tool_callable
-from utils.sse import sse_pack
+from utils.errors import _get_status_code
 from utils.load_configs import _load_models_config
 from utils.logger_new import log_llm_call
-from utils.errors import _get_status_code
-from utils.otel_metrics import record_llm_request, record_llm_latency, record_llm_ttft, record_llm_tokens_per_second, record_llm_tokens, record_llm_cost, record_llm_tool_call
+from utils.otel_metrics import (
+    record_llm_cost,
+    record_llm_latency,
+    record_llm_request,
+    record_llm_tokens,
+    record_llm_tokens_per_second,
+    record_llm_tool_call,
+    record_llm_ttft,
+)
+from utils.sse import sse_pack
 
 
 @dataclass
 class ToolStatusMarker:
     """Marker to indicate tool execution status in streaming."""
+
     tool_names: list
 
 
-def _split_concatenated_tool_names(raw_name: Optional[str], known_tool_names: List[str]) -> List[str]:
+def _split_concatenated_tool_names(raw_name: str | None, known_tool_names: list[str]) -> list[str]:
     """
     Some providers (e.g., Gemini via OpenAI-compatible APIs) may stream tool names
     in a way that causes multiple tool names to be concatenated into a single string,
@@ -36,11 +50,13 @@ def _split_concatenated_tool_names(raw_name: Optional[str], known_tool_names: Li
         return []
 
     # If it's already a known tool name, return as-is
-    normalized_known = [name.strip() for name in known_tool_names if isinstance(name, str) and name.strip()]
+    normalized_known = [
+        name.strip() for name in known_tool_names if isinstance(name, str) and name.strip()
+    ]
     if s in normalized_known:
         return [s]
 
-    result: List[str] = []
+    result: list[str] = []
     remaining = s
     # Greedy longest-prefix matching to reduce ambiguity
     sorted_known = sorted(set(normalized_known), key=len, reverse=True)
@@ -54,12 +70,12 @@ def _split_concatenated_tool_names(raw_name: Optional[str], known_tool_names: Li
         if not match:
             return []
         result.append(match)
-        remaining = remaining[len(match):]
+        remaining = remaining[len(match) :]
 
     return result if result else []
 
 
-def _split_concatenated_json_objects(raw: Optional[str]) -> List[str]:
+def _split_concatenated_json_objects(raw: str | None) -> list[str]:
     """
     Split a string containing one or more concatenated JSON objects (e.g., '{"a":1}{"b":2}')
     into individual JSON strings. Returns an empty list if the string cannot be cleanly split.
@@ -78,7 +94,7 @@ def _split_concatenated_json_objects(raw: Optional[str]) -> List[str]:
     except json.JSONDecodeError:
         pass
 
-    segments: List[str] = []
+    segments: list[str] = []
     depth = 0
     in_string = False
     escape = False
@@ -92,10 +108,7 @@ def _split_concatenated_json_objects(raw: Optional[str]) -> List[str]:
                 depth += 1
             elif char in "}]":
                 depth = max(depth - 1, 0)
-        if char == "\\" and not escape:
-            escape = True
-        else:
-            escape = False
+        escape = char == "\\" and not escape
 
         if depth == 0 and not in_string:
             segment = candidate[start : idx + 1].strip()
@@ -112,7 +125,7 @@ def _split_concatenated_json_objects(raw: Optional[str]) -> List[str]:
     if not segments:
         return []
 
-    cleaned_segments: List[str] = []
+    cleaned_segments: list[str] = []
     for segment in segments:
         try:
             json.loads(segment)
@@ -124,11 +137,11 @@ def _split_concatenated_json_objects(raw: Optional[str]) -> List[str]:
 
 
 def _expand_tool_calls(
-    call_id: Optional[str],
-    raw_name: Optional[str],
-    raw_arguments: Optional[str],
-    known_tool_names: List[str],
-) -> List[Dict[str, Any]]:
+    call_id: str | None,
+    raw_name: str | None,
+    raw_arguments: str | None,
+    known_tool_names: list[str],
+) -> list[dict[str, Any]]:
     """
     Normalize/expand a potentially malformed tool call coming from a streaming chunk.
 
@@ -194,9 +207,13 @@ def _expand_tool_calls(
 MAX_TOOL_ITERATIONS = 5
 
 
-def _build_chat_endpoint(base_url: Optional[str]) -> str:
+def _build_chat_endpoint(base_url: str | None) -> str:
     base = base_url or "https://api.openai.com/v1"
     return f"{base.rstrip('/')}/chat/completions"
+
+
+def _safe_str(value: str | None) -> str:
+    return value or ""
 
 
 def _is_o4_model(model: str) -> bool:
@@ -206,7 +223,9 @@ def _is_o4_model(model: str) -> bool:
 def _uses_max_completion_tokens(model: str) -> bool:
     # Some newer OpenAI models reject `max_tokens` and require `max_completion_tokens`.
     # Keep this check narrowly scoped to avoid changing other model capability logic.
-    return (model.startswith("o") and ("-mini" in model or model.startswith(("o1", "o3", "o4")))) or model.startswith("gpt-5")
+    return (
+        model.startswith("o") and ("-mini" in model or model.startswith(("o1", "o3", "o4")))
+    ) or model.startswith("gpt-5")
 
 
 def _supports_seed(model: str) -> bool:
@@ -266,16 +285,16 @@ def _unified_openai_api_call(
     stream: bool,
     api_key: str,
     base_url: str,
-    stream_mode: Literal["raw","sse"]="raw",
+    stream_mode: Literal["raw", "sse"] = "raw",
     sse_event: str = "message",
-    send_done: bool = False,               # optional status event
-    include_metrics: bool = True,           # add TTFT and latency to final event
+    send_done: bool = False,  # optional status event
+    include_metrics: bool = True,  # add TTFT and latency to final event
     max_retries: int = 0,
-    provider_id: Optional[str] = None,
-    model_config_id: Optional[str] = None,
-    session_id: Optional[str] = None,
-    trace_id: Optional[str] = None,
-    backend_endpoint: Optional[str] = None,
+    provider_id: str | None = None,
+    model_config_id: str | None = None,
+    session_id: str | None = None,
+    trace_id: str | None = None,
+    backend_endpoint: str | None = None,
 ):
     """
     Chat completion via OpenAI-compatible API (OpenAI, vLLM, etc).
@@ -325,14 +344,21 @@ def _unified_openai_api_call(
         If stream=False: Dict containing response text, usage, and metrics
     """
 
+    # Normalize optional identifiers to concrete strings for metrics/logging.
+    provider_id = provider_id or "unknown"
+    backend_endpoint = backend_endpoint or "unknown"
+    model_config_id = model_config_id or model
+
     client = openai.OpenAI(api_key=api_key, base_url=base_url, max_retries=max_retries)
     logger_name = os.getenv("LOGGER_NAME", "llm-router")
     app_logger = logging.getLogger(logger_name)
     api_endpoint = _build_chat_endpoint(base_url)
-    model_identifier = model_config_id or model
+    model_identifier: str = model_config_id
+    provider_safe: str = _safe_str(provider_id)
+    endpoint_safe: str = _safe_str(backend_endpoint)
 
-    def _extra_fields(additional: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        extras: Dict[str, Any] = {
+    def _extra_fields(additional: dict[str, Any] | None = None) -> dict[str, Any]:
+        extras: dict[str, Any] = {
             "stream_mode": stream_mode if stream else None,
         }
         if additional:
@@ -341,7 +367,7 @@ def _unified_openai_api_call(
                     extras[key] = value
         return {k: v for k, v in extras.items() if v is not None}
 
-    def _emit_success(metrics_payload: Dict[str, Any], extra: Optional[Dict[str, Any]] = None):
+    def _emit_success(metrics_payload: dict[str, Any], extra: dict[str, Any] | None = None):
         merged_extra = {
             "tokens_per_chunk": metrics_payload.get("tokens_per_chunk"),
             "executed_tools": metrics_payload.get("executed_tools"),
@@ -370,42 +396,42 @@ def _unified_openai_api_call(
         )
         # Record OTEL metrics
         record_llm_request(
-            provider=provider_id,
+            provider=provider_safe,
             model_id=model_identifier,
             status="ok",
-            endpoint=backend_endpoint,
+            endpoint=endpoint_safe,
         )
         # Record latency histogram (convert ms to seconds)
         latency_ms = metrics_payload.get("latency_ms")
         if latency_ms is not None:
             record_llm_latency(
-                provider=provider_id,
+                provider=provider_safe,
                 model_id=model_identifier,
-                endpoint=backend_endpoint,
+                endpoint=endpoint_safe,
                 latency_seconds=latency_ms / 1000.0,
             )
         # Record TTFT histogram (convert ms to seconds)
         ttft_ms = metrics_payload.get("ttft_ms")
         if ttft_ms is not None:
             record_llm_ttft(
-                provider=provider_id,
+                provider=provider_safe,
                 model_id=model_identifier,
-                endpoint=backend_endpoint,
+                endpoint=endpoint_safe,
                 ttft_seconds=ttft_ms / 1000.0,
             )
         # Record tokens per second
         tokens_per_second = metrics_payload.get("tokens_per_second")
         if tokens_per_second is not None:
             record_llm_tokens_per_second(
-                provider=provider_id,
+                provider=provider_safe,
                 model_id=model_identifier,
-                endpoint=backend_endpoint,
+                endpoint=endpoint_safe,
                 tokens_per_second=tokens_per_second,
             )
         prompt_tokens = metrics_payload.get("prompt_tokens")
         if prompt_tokens is not None:
             record_llm_tokens(
-                provider=provider_id,
+                provider=provider_safe,
                 model_id=model_identifier,
                 token_type="prompt",
                 count=prompt_tokens,
@@ -413,7 +439,7 @@ def _unified_openai_api_call(
         completion_tokens = metrics_payload.get("completion_tokens")
         if completion_tokens is not None:
             record_llm_tokens(
-                provider=provider_id,
+                provider=provider_safe,
                 model_id=model_identifier,
                 token_type="completion",
                 count=completion_tokens,
@@ -425,7 +451,7 @@ def _unified_openai_api_call(
             reasoning_tokens = total_tokens - prompt_tokens - completion_tokens
             if reasoning_tokens > 0:
                 record_llm_tokens(
-                    provider=provider_id,
+                    provider=provider_safe,
                     model_id=model_identifier,
                     token_type="reasoning",
                     count=reasoning_tokens,
@@ -434,20 +460,19 @@ def _unified_openai_api_call(
         cost_usd = metrics_payload.get("cost_usd")
         if cost_usd is not None:
             record_llm_cost(
-                provider=provider_id,
+                provider=provider_safe,
                 model_id=model_identifier,
                 cost_usd=cost_usd,
             )
 
     def _emit_error(
-        exc: Optional[Exception] = None,
+        exc: Exception | None = None,
         *,
-        message: Optional[str] = None,
-        http_status: Optional[int] = None,
+        message: str | None = None,
+        http_status: int | None = None,
     ):
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
         error_text = message or (str(exc) if exc else None)
-        exception_type = type(exc).__name__ if exc else None
         log_llm_call(
             logger=app_logger,
             event="llm_call_failed",
@@ -466,18 +491,18 @@ def _unified_openai_api_call(
         )
         # Record OTEL metric
         record_llm_request(
-            provider=provider_id,
+            provider=provider_safe,
             model_id=model_identifier,
             status="error",
-            endpoint=backend_endpoint,
+            endpoint=endpoint_safe,
         )
 
     normalized_messages = (
         [{"role": "user", "content": messages}] if isinstance(messages, str) else messages
     )
-    
+
     temperature = 1.0 if _is_o4_model(model) else params.get("temperature")
-    
+
     kwargs = {
         "model": model,
         "messages": normalized_messages,
@@ -485,15 +510,15 @@ def _unified_openai_api_call(
         "top_p": params.get("top_p"),
         "stream": stream,
     }
-    
+
     if _uses_max_completion_tokens(model):
         kwargs["max_completion_tokens"] = params.get("max_tokens")
     else:
         kwargs["max_tokens"] = params.get("max_tokens")
-    
+
     if _supports_seed(model):
         kwargs["seed"] = params.get("seed")
-    
+
     reasoning_effort = params.get("reasoning_effort")
     if reasoning_effort is not None:
         kwargs["reasoning_effort"] = reasoning_effort
@@ -510,11 +535,9 @@ def _unified_openai_api_call(
     tools = params.get("tools")
     tool_choice = params.get("tool_choice")
 
-    known_tool_names: List[str] = []
+    known_tool_names: list[str] = []
     if tools:
-        kwargs["tools"] = [
-            t.model_dump() if hasattr(t, "model_dump") else t for t in tools
-        ]
+        kwargs["tools"] = [t.model_dump() if hasattr(t, "model_dump") else t for t in tools]
         # Track known tool names for cleaning up malformed streaming payloads
         for t in tools:
             fn = None
@@ -543,17 +566,18 @@ def _unified_openai_api_call(
         #         "Tools/functions are only supported for non-streaming calls in this version."
         #     )
         kwargs["stream_options"] = {"include_usage": True}
-    
+
     t0 = time.perf_counter()
 
     # For streaming, we perform a single call and then stream chunks as before.
     # For non-streaming, we may perform multiple calls if tool calls are used.
     if stream:
+
         def _stream_with_tools(current_messages, iteration_count=0, recent_tool_calls=None):
             # Track recent tool calls to detect loops
             if recent_tool_calls is None:
                 recent_tool_calls = []
-            
+
             # Prevent infinite loops by limiting iterations
             if iteration_count >= MAX_TOOL_ITERATIONS:
                 # Emit error message and stop
@@ -564,42 +588,42 @@ def _unified_openai_api_call(
                 else:
                     yield sse_pack(error_msg, event="error")
                 return
-            
+
             # Update messages in kwargs
             local_kwargs = kwargs.copy()
             local_kwargs["messages"] = current_messages
-            
+
             # We need to track if we are in a tool call loop
             # If tools are not enabled, this is just a single pass
-            
+
             try:
                 response_stream = client.chat.completions.create(**local_kwargs)
             except Exception as exc:
                 _emit_error(exc)
                 raise
-            
+
             # Buffer for accumulating tool calls
             # Map index -> {id, name, arguments}
             tool_calls_buffer = {}
             finish_reason = None
-            
+
             # Helper to append chunks to buffer
             for chunk in response_stream:
                 # 1. Yield the chunk immediately so text/usage propagates
                 yield chunk
-                
+
                 if not chunk.choices:
                     continue
-                    
+
                 delta = chunk.choices[0].delta
-                
+
                 # Accumulate tool calls if present
                 if delta.tool_calls:
                     for tc in delta.tool_calls:
                         idx = tc.index
                         if idx not in tool_calls_buffer:
                             tool_calls_buffer[idx] = {"id": "", "name": "", "arguments": ""}
-                        
+
                         if tc.id:
                             tool_calls_buffer[idx]["id"] += tc.id
                         if tc.function:
@@ -607,15 +631,15 @@ def _unified_openai_api_call(
                                 tool_calls_buffer[idx]["name"] += tc.function.name
                             if tc.function.arguments:
                                 tool_calls_buffer[idx]["arguments"] += tc.function.arguments
-                
+
                 if chunk.choices[0].finish_reason:
                     finish_reason = chunk.choices[0].finish_reason
-            
+
             # End of stream for this turn. Check if we need to execute tools.
             if finish_reason == "tool_calls" and tool_calls_buffer:
                 # 1. Reconstruct the assistant message with tool calls
-                tool_calls_payload: List[Dict[str, Any]] = []
-                tool_exec_entries: List[Dict[str, Any]] = []
+                tool_calls_payload: list[dict[str, Any]] = []
+                tool_exec_entries: list[dict[str, Any]] = []
                 current_tool_signatures = []  # Track tool name + arguments for loop detection
                 for idx in sorted(tool_calls_buffer.keys()):
                     tc_data = tool_calls_buffer[idx]
@@ -658,7 +682,7 @@ def _unified_openai_api_call(
                             }
                         )
                         current_tool_signatures.append((tool_name, tool_args))
-                
+
                 # Check for repeated identical tool calls (loop detection)
                 if _is_tool_loop(recent_tool_calls, current_tool_signatures):
                     error_msg = "⚠️ Detected infinite loop: same tool calls repeated. Stopping to prevent infinite loop."
@@ -668,19 +692,17 @@ def _unified_openai_api_call(
                     else:
                         yield sse_pack(error_msg, event="error")
                     return
-                
+
                 # Track this tool call set (keep last 5 for loop detection)
                 recent_tool_calls.append(current_tool_signatures)
                 if len(recent_tool_calls) > 5:
                     recent_tool_calls.pop(0)
-                
+
                 # Append assistant message
-                current_messages.append({
-                    "role": "assistant",
-                    "content": None, 
-                    "tool_calls": tool_calls_payload
-                })
-                
+                current_messages.append(
+                    {"role": "assistant", "content": None, "tool_calls": tool_calls_payload}
+                )
+
                 # 2. Execute tools
                 executed_tool_names = []
                 seen_tool_calls = set()  # Track unique tool calls to avoid duplicates
@@ -688,20 +710,20 @@ def _unified_openai_api_call(
                     func_name = tc["name"]
                     func_args_str = tc["arguments"]
                     call_id = tc.get("id")
-                    
+
                     # Validate and clean tool name (strip whitespace, handle empty/malformed names)
                     if not func_name or not isinstance(func_name, str):
                         continue
                     func_name = func_name.strip()
                     if not func_name:
                         continue
-                    
+
                     # Create a unique key for this tool call (name + args to handle same tool with different args)
                     tool_call_key = (func_name, func_args_str, call_id)
                     if tool_call_key not in seen_tool_calls:
                         seen_tool_calls.add(tool_call_key)
                         executed_tool_names.append(func_name)
-                    
+
                     result_content = ""
                     try:
                         args = {}
@@ -710,7 +732,7 @@ def _unified_openai_api_call(
                                 args = json.loads(func_args_str)
                             except json.JSONDecodeError:
                                 args = {}
-                        
+
                         tool_callable = get_tool_callable(func_name)
                         # Execute
                         if isinstance(args, dict):
@@ -725,20 +747,26 @@ def _unified_openai_api_call(
                         )
                     except Exception as exc:
                         result_content = json.dumps({"error": f"Tool execution failed: {exc}"})
-                    
+
                     # Append tool result message
-                    current_messages.append({
-                        "role": "tool",
-                        "tool_call_id": call_id,
-                        "name": func_name,
-                        "content": result_content
-                    })
-                
+                    current_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "name": func_name,
+                            "content": result_content,
+                        }
+                    )
+
                 # 2.5. Emit tool status marker before recursing
                 yield ToolStatusMarker(tool_names=executed_tool_names)
-                
+
                 # 3. Recurse: Start a new stream with updated messages (increment iteration count, pass recent_tool_calls)
-                yield from _stream_with_tools(current_messages, iteration_count=iteration_count + 1, recent_tool_calls=recent_tool_calls)
+                yield from _stream_with_tools(
+                    current_messages,
+                    iteration_count=iteration_count + 1,
+                    recent_tool_calls=recent_tool_calls,
+                )
 
         res = _stream_with_tools(normalized_messages)
         # res = client.chat.completions.create(**kwargs)
@@ -751,7 +779,7 @@ def _unified_openai_api_call(
             if isinstance(ch, ToolStatusMarker):
                 yield ch, None  # Pass marker with None as the chunk
                 continue
-                
+
             piece = None
             # Try delta.content first (standard streaming format)
             try:
@@ -759,7 +787,7 @@ def _unified_openai_api_call(
                 piece = getattr(delta, "content", None)
             except (AttributeError, IndexError, TypeError):
                 pass
-            
+
             # Fallback: check message.content (some models like o4-mini may use this for final chunk)
             if not piece:
                 try:
@@ -767,30 +795,35 @@ def _unified_openai_api_call(
                     piece = getattr(message, "content", None)
                 except (AttributeError, IndexError, TypeError):
                     pass
-            
+
             if piece:
                 yield piece, ch
             else:
                 # still forward the chunk (with None text) so we can inspect usage
                 yield None, ch
 
-    def _lookup_pricing(model_id: str, prompt_tokens: int, completion_tokens: int) -> float:
+    def _lookup_pricing(model_id: str, prompt_tokens: int, completion_tokens: int) -> float | None:
         """Compute USD cost for a given model and token usage."""
         from utils.load_configs import expand_env_var
-        
+
         cfg = _load_models_config()
         for m in cfg.get("models", []):
             if m.get("id") == model_id or m.get("model_name") == model_id:
                 pricing = m.get("pricing", {})
                 # Expand env vars and convert to float for pricing calculations
-                in_rate = expand_env_var(pricing.get("input", 0.0), return_type=float)   # $ per 1k prompt tokens
-                out_rate = expand_env_var(pricing.get("output", 0.0), return_type=float) # $ per 1k completion tokens
-                cost = (prompt_tokens or 0) * in_rate / 1000.0 \
-                    + (completion_tokens or 0) * out_rate / 1000.0
+                in_rate = float(
+                    expand_env_var(pricing.get("input", 0.0), return_type=float) or 0.0
+                )  # $ per 1k prompt tokens
+                out_rate = float(
+                    expand_env_var(pricing.get("output", 0.0), return_type=float) or 0.0
+                )  # $ per 1k completion tokens
+                prompt_val = float(prompt_tokens or 0)
+                completion_val = float(completion_tokens or 0)
+                cost = prompt_val * in_rate / 1000.0 + completion_val * out_rate / 1000.0
                 return round(cost, 6)
         return None  # model not found
 
-    def _extract_reasoning_tokens(usage_obj) -> Optional[int]:
+    def _extract_reasoning_tokens(usage_obj) -> int | None:
         """Best-effort extraction of reasoning tokens from usage object."""
         if not usage_obj:
             return None
@@ -809,11 +842,7 @@ def _unified_openai_api_call(
             total = getattr(usage_obj, "total_tokens", None)
             prompt = getattr(usage_obj, "prompt_tokens", None)
             completion = getattr(usage_obj, "completion_tokens", None)
-            if (
-                total is not None
-                and prompt is not None
-                and completion is not None
-            ):
+            if total is not None and prompt is not None and completion is not None:
                 try:
                     reasoning = total - prompt - completion
                     if reasoning < 0:
@@ -822,11 +851,10 @@ def _unified_openai_api_call(
                     reasoning = None
         return reasoning
 
-
     def _update_usage_totals(usage_obj, totals, accumulate=False):
         """
         Update usage totals from a usage object.
-        
+
         Args:
             usage_obj: Usage object from API response
             totals: Dict to update with usage totals
@@ -858,7 +886,7 @@ def _unified_openai_api_call(
         total_tokens = usage_totals["total_tokens"]
         reasoning_tokens = usage_totals.get("reasoning_tokens")
         cost_usd = _lookup_pricing(model, prompt_tokens, completion_tokens)
-        
+
         # For Gemini models, adjust token count using character-to-token ratio
         # Gemini streams in chunks and reports tokens optimistically
         # 1 token ≈ 4 characters for Gemini
@@ -868,7 +896,7 @@ def _unified_openai_api_call(
             # Estimate actual tokens from text length
             estimated_tokens = text_length / 4.0
             effective_completion_tokens = estimated_tokens
-        
+
         # Calculate tokens_per_second: completion_tokens / generation_time
         # Generation time = total latency - TTFT (excludes initial wait time)
         tokens_per_second = None
@@ -877,7 +905,7 @@ def _unified_openai_api_call(
             generation_time = latency - ttft_seconds
             if generation_time > 0:
                 tokens_per_second = round(effective_completion_tokens / generation_time, 2)
-        
+
         return {
             "ttft_ms": round(ttft * 1000, 1) if ttft is not None else None,
             "latency_ms": round(latency * 1000, 1),
@@ -899,6 +927,7 @@ def _unified_openai_api_call(
     # --- streaming path -----------------------------------------------------
     if stream:
         if stream_mode == "raw":
+
             def _iter_raw() -> Generator[str, None, None]:
                 ttft = None
                 chunk_count = 0
@@ -920,16 +949,16 @@ def _unified_openai_api_call(
                                 tool_msg = {"tool_status": f"🔧 `{tool_name}` is executed..."}
                                 yield "\n" + json.dumps(tool_msg) + "\n"
                             continue
-                        
+
                         # mark TTFT on first chunk that arrives (text or usage)
                         if ttft is None:
                             ttft = time.perf_counter() - t0
                         # collect usage if/when the final usage chunk arrives
                         # For tool calls, accumulate across iterations; otherwise replace (handle duplicates)
-                        try:
-                            _update_usage_totals(getattr(ch, "usage", None), usage_totals, accumulate=bool(tools))
-                        except Exception:
-                            pass
+                        with contextlib.suppress(Exception):
+                            _update_usage_totals(
+                                getattr(ch, "usage", None), usage_totals, accumulate=bool(tools)
+                            )
                         if piece:
                             chunk_count += 1
                             text_length += len(piece)
@@ -939,7 +968,9 @@ def _unified_openai_api_call(
                     raise
 
                 total = time.perf_counter() - t0
-                metrics_payload = _build_metrics_payload(ttft, total, chunk_count, usage_totals, text_length)
+                metrics_payload = _build_metrics_payload(
+                    ttft, total, chunk_count, usage_totals, text_length
+                )
                 if executed_tools:
                     metrics_payload["executed_tools"] = sorted(executed_tools)
                 _emit_success(metrics_payload)
@@ -947,6 +978,7 @@ def _unified_openai_api_call(
                     metrics = {"metrics": metrics_payload}
                     # emit a newline + JSON so curl clients can read it cleanly
                     yield "\n" + json.dumps(metrics) + "\n"
+
             return _iter_raw()
 
         # SSE mode
@@ -971,15 +1003,15 @@ def _unified_openai_api_call(
                             tool_msg = f"🔧 `{tool_name}` is executed..."
                             yield sse_pack(tool_msg, event="tool_status")
                         continue
-                    
+
                     if ttft is None:
                         ttft = time.perf_counter() - t0
                     # capture usage if present (arrives as the last/penultimate chunk)
                     # For tool calls, accumulate across iterations; otherwise replace (handle duplicates)
-                    try:
-                        _update_usage_totals(getattr(ch, "usage", None), usage_totals, accumulate=bool(tools))
-                    except Exception:
-                        pass
+                    with contextlib.suppress(Exception):
+                        _update_usage_totals(
+                            getattr(ch, "usage", None), usage_totals, accumulate=bool(tools)
+                        )
                     if piece:
                         chunk_count += 1
                         text_length += len(piece)
@@ -989,7 +1021,9 @@ def _unified_openai_api_call(
                 raise
 
             total = time.perf_counter() - t0
-            metrics_payload = _build_metrics_payload(ttft, total, chunk_count, usage_totals, text_length)
+            metrics_payload = _build_metrics_payload(
+                ttft, total, chunk_count, usage_totals, text_length
+            )
             if executed_tools:
                 metrics_payload["executed_tools"] = sorted(executed_tools)
             _emit_success(metrics_payload)
@@ -997,8 +1031,9 @@ def _unified_openai_api_call(
                 yield sse_pack("done", event="status")
             if include_metrics:
                 yield sse_pack(json.dumps(metrics_payload), event="metrics")
+
         return _iter_sse()
-        
+
     # --- non-streaming path (with optional tools) ---------------------------
 
     def _single_completion_call(current_messages):
@@ -1010,7 +1045,7 @@ def _unified_openai_api_call(
         local_kwargs.pop("stream_options", None)
         return client.chat.completions.create(**local_kwargs)
 
-    messages_for_tools = list(normalized_messages)
+    messages_for_tools: list[dict[str, Any]] = cast(list[dict[str, Any]], list(normalized_messages))
     prompt_tokens_total = 0
     completion_tokens_total = 0
     total_tokens_total = 0
@@ -1049,9 +1084,9 @@ def _unified_openai_api_call(
         if finish_reason == "tool_calls" and getattr(msg, "tool_calls", None):
             # Track current tool call signatures for loop detection
             current_tool_signatures = []
-            tool_calls_payload: List[Dict[str, Any]] = []
+            tool_calls_payload: list[dict[str, Any]] = []
             tool_result_messages = []
-            tool_exec_entries: List[Dict[str, Any]] = []
+            tool_exec_entries: list[dict[str, Any]] = []
 
             for tc in msg.tool_calls:
                 tc_id = getattr(tc, "id", None)
@@ -1086,12 +1121,12 @@ def _unified_openai_api_call(
                             "arguments": tool_args,
                         }
                     )
-            
+
             # Check for repeated identical tool calls (loop detection)
             if _is_tool_loop(recent_tool_calls, current_tool_signatures):
                 final_content = "⚠️ Detected infinite loop: same tool calls repeated. Stopping to prevent infinite loop."
                 break
-            
+
             # Track this tool call set (keep last 5 for loop detection)
             recent_tool_calls.append(current_tool_signatures)
             if len(recent_tool_calls) > 5:
@@ -1116,7 +1151,9 @@ def _unified_openai_api_call(
                         except json.JSONDecodeError:
                             args = {}
                     tool_callable = get_tool_callable(name)
-                    result = tool_callable(**args) if isinstance(args, dict) else tool_callable(args)
+                    result = (
+                        tool_callable(**args) if isinstance(args, dict) else tool_callable(args)
+                    )
                     # Record tool call metric
                     record_llm_tool_call(
                         model_id=model_identifier,
@@ -1147,7 +1184,7 @@ def _unified_openai_api_call(
 
             # Loop again with updated messages to let the model use tool results.
             continue
-        
+
         # If we reach here and iteration_count >= MAX_TOOL_ITERATIONS, break to prevent infinite loop
         if iteration_count >= MAX_TOOL_ITERATIONS:
             final_content = msg.content or ""
@@ -1177,25 +1214,27 @@ def _unified_openai_api_call(
             if text_length > 0:
                 estimated_tokens = text_length / 4.0
                 effective_completion_tokens = estimated_tokens
-        
+
         tokens_per_second = None
         if effective_completion_tokens is not None and total is not None and total > 0:
             tokens_per_second = round(effective_completion_tokens / total, 2)
 
         # Reasoning tokens: prefer explicit from provider; otherwise derive
         reasoning_tokens_final = reasoning_tokens_total
-        if reasoning_tokens_final is None:
-            if (
-                total_tokens_total is not None
-                and prompt_tokens_total is not None
-                and completion_tokens_total is not None
-            ):
-                try:
-                    reasoning_tokens_final = total_tokens_total - prompt_tokens_total - completion_tokens_total
-                    if reasoning_tokens_final < 0:
-                        reasoning_tokens_final = 0
-                except Exception:
-                    reasoning_tokens_final = None
+        if (
+            reasoning_tokens_final is None
+            and total_tokens_total is not None
+            and prompt_tokens_total is not None
+            and completion_tokens_total is not None
+        ):
+            try:
+                reasoning_tokens_final = (
+                    total_tokens_total - prompt_tokens_total - completion_tokens_total
+                )
+                if reasoning_tokens_final < 0:
+                    reasoning_tokens_final = 0
+            except Exception:
+                reasoning_tokens_final = None
 
         metrics_payload = {
             "ttft_ms": None,  # not meaningful for non-streaming

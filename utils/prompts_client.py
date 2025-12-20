@@ -1,17 +1,21 @@
-import httpx
-from typing import Dict, Any, List
+from typing import Any
 
-def list_prompts(api_base_url: str) -> List[Dict[str, Any]]:
+import httpx
+
+
+def list_prompts(api_base_url: str) -> list[dict[str, Any]]:
     r = httpx.get(f"{api_base_url.rstrip('/')}/prompts", timeout=10.0)
     r.raise_for_status()
     return r.json().get("prompts", [])
 
-def get_prompt(api_base_url: str, prompt_id: str) -> Dict[str, Any]:
+
+def get_prompt(api_base_url: str, prompt_id: str) -> dict[str, Any]:
     r = httpx.get(f"{api_base_url.rstrip('/')}/prompts/{prompt_id}", timeout=10.0)
     r.raise_for_status()
     return r.json()
 
-def render_prompt(api_base_url: str, prompt_id: str, variables: Dict[str, Any]) -> Dict[str, Any]:
+
+def render_prompt(api_base_url: str, prompt_id: str, variables: dict[str, Any]) -> dict[str, Any]:
     r = httpx.post(
         f"{api_base_url.rstrip('/')}/prompts/{prompt_id}/render",
         json={"variables": variables},
@@ -19,5 +23,3 @@ def render_prompt(api_base_url: str, prompt_id: str, variables: Dict[str, Any]) 
     )
     r.raise_for_status()
     return r.json()
-
-

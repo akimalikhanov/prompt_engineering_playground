@@ -1,4 +1,4 @@
-from typing import Any, Dict, Tuple
+from typing import Any
 
 
 def _resolve_custom_delimiter(cs: str, ce: str) -> tuple[str, str]:
@@ -21,22 +21,24 @@ def _resolve_xml_delimiter(cs: str, _: str) -> tuple[str, str]:
 
 
 # Resolver functions mapped by type
-RESOLVER_FUNCTIONS: Dict[str, Any] = {
+RESOLVER_FUNCTIONS: dict[str, Any] = {
     "markdown": _resolve_markdown_delimiter,
     "xml": _resolve_xml_delimiter,
     "custom": _resolve_custom_delimiter,
 }
 
 
-def _delim_pair(style: str, custom_start: str, custom_end: str, delimiter_definitions: Dict[str, Dict[str, Any]]) -> tuple[str, str]:
+def _delim_pair(
+    style: str, custom_start: str, custom_end: str, delimiter_definitions: dict[str, dict[str, Any]]
+) -> tuple[str, str]:
     """Get delimiter pair for a given style.
-    
+
     Args:
         style: Delimiter style name
         custom_start: Custom start token
         custom_end: Custom end token
         delimiter_definitions: Dict of delimiter definitions
-        
+
     Returns:
         Tuple of (start_delimiter, end_delimiter)
     """
@@ -55,7 +57,13 @@ def _delim_pair(style: str, custom_start: str, custom_end: str, delimiter_defini
     return definition["start"], definition["end"]
 
 
-def _insert_pair_at_end(current_text: str, style: str, cs: str, ce: str, delimiter_definitions: Dict[str, Dict[str, Any]]) -> str:
+def _insert_pair_at_end(
+    current_text: str,
+    style: str,
+    cs: str,
+    ce: str,
+    delimiter_definitions: dict[str, dict[str, Any]],
+) -> str:
     start, end = _delim_pair(style, cs, ce, delimiter_definitions)
     current_text = current_text or ""
     # add a blank line before for readability unless already at a newline or empty
@@ -63,8 +71,13 @@ def _insert_pair_at_end(current_text: str, style: str, cs: str, ce: str, delimit
     return f"{current_text}{prefix}{start}{end}"
 
 
-def _wrap_entire_message(current_text: str, style: str, cs: str, ce: str, delimiter_definitions: Dict[str, Dict[str, Any]]) -> str:
+def _wrap_entire_message(
+    current_text: str,
+    style: str,
+    cs: str,
+    ce: str,
+    delimiter_definitions: dict[str, dict[str, Any]],
+) -> str:
     start, end = _delim_pair(style, cs, ce, delimiter_definitions)
     current_text = current_text or ""
     return f"{start}{current_text}\n{end}"
-

@@ -1,0 +1,59 @@
+{
+  "include": [
+    "adapters",
+    "api",
+    "config",
+    "models",
+    "schemas",
+    "services",
+    "storage",
+    "ui",
+    "utils",
+    "tests"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "**/node_modules",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+    "*.egg-info",
+    "infra",
+    "docs",
+    "examples",
+    "experiments",
+    "logs"
+  ],
+  "defineConstant": {
+    "DEBUG": true
+  },
+  "stubPath": "",
+  "venvPath": ".",
+  "venv": ".venv",
+  "pythonVersion": "3.12",
+  "pythonPlatform": "Linux",
+  "typeCheckingMode": "basic",
+  
+  "reportMissingImports": true,
+  "reportImportCycles": true,
+
+  "reportOptionalSubscript": true,
+  "reportOptionalMemberAccess": true,
+  "reportOptionalCall": true,
+  "reportOptionalIterable": true,
+  "reportOptionalContextManager": true,
+  "reportOptionalOperand": true,
+
+  "reportIncompatibleMethodOverride": true,
+  "reportIncompatibleVariableOverride": true,
+
+  "reportCallInDefaultInitializer": true,
+  "reportUninitializedInstanceVariable": true,
+  "reportInvalidStringEscapeSequence": true,
+
+  "reportUnknownArgumentType": "warning",
+  "reportUnknownVariableType": "warning",
+  "reportUnknownMemberType": "warning"
+}
+

@@ -3,12 +3,13 @@ import logging
 import os
 import uuid
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from logging.handlers import TimedRotatingFileHandler
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-from opentelemetry.sdk._logs import LoggerProvider as OtelLoggerProvider, LoggingHandler as OtelLoggingHandler
+from opentelemetry.sdk._logs import LoggerProvider as OtelLoggerProvider
+from opentelemetry.sdk._logs import LoggingHandler as OtelLoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 
 from utils.otel_config import get_otel_resource, get_otlp_logs_endpoint
@@ -18,14 +19,17 @@ _OTEL_RUNTIME_REFS = []
 # Correlation ID (request-scoped)
 _corr_id_var: ContextVar[str] = ContextVar("corr_id", default="-")
 
+
 def get_correlation_id() -> str:
     return _corr_id_var.get()
 
-def set_correlation_id(corr_id: Optional[str] = None) -> str:
+
+def set_correlation_id(corr_id: str | None = None) -> str:
     if not corr_id:
         corr_id = str(uuid.uuid4())
     _corr_id_var.set(corr_id)
     return corr_id
+
 
 class CorrelationFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
@@ -33,6 +37,7 @@ class CorrelationFilter(logging.Filter):
         # Include logger_name so it becomes an OTEL log attribute (for Loki querying)
         record.logger_name = record.name
         return True
+
 
 THIRD_PARTY_LOGGERS = (
     "uvicorn",
@@ -46,6 +51,7 @@ THIRD_PARTY_LOGGERS = (
     "httpx._transports.default",
     "httpcore",
 )
+
 
 class JsonLogFormatter(logging.Formatter):
     """Emit structured JSON logs that encode useful metadata."""
@@ -80,7 +86,7 @@ class JsonLogFormatter(logging.Formatter):
         self._default_event = default_event
 
     def format(self, record: logging.LogRecord) -> str:
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "ts": self._format_ts(record.created),
             "level": record.levelname,
             "logger": record.name,
@@ -97,11 +103,11 @@ class JsonLogFormatter(logging.Formatter):
 
     @staticmethod
     def _format_ts(created: float) -> str:
-        dt = datetime.fromtimestamp(created, tz=timezone.utc)
+        dt = datetime.fromtimestamp(created, tz=UTC)
         return dt.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
-    def _extract_extra(self, record: logging.LogRecord) -> Dict[str, Any]:
-        extras: Dict[str, Any] = {}
+    def _extract_extra(self, record: logging.LogRecord) -> dict[str, Any]:
+        extras: dict[str, Any] = {}
         for key, value in record.__dict__.items():
             if key in self.RESERVED_ATTRS or key.startswith("_"):
                 continue
@@ -119,8 +125,9 @@ class JsonLogFormatter(logging.Formatter):
             return [self._serialize(v) for v in value]
         if hasattr(value, "value"):
             # simple support for Enum values
-            return getattr(value, "value")
+            return value.value
         return repr(value)
+
 
 def _ensure_logs_dir(path: str):
     directory = os.path.dirname(os.path.abspath(path))
@@ -132,6 +139,7 @@ def _ensure_logs_dir(path: str):
     if not os.path.exists(path):
         open(path, "a", encoding="utf-8").close()
 
+
 def _add_handler_once(logger: logging.Logger, handler: logging.Handler):
     # Avoid duplicate handlers when re-calling setup
     sig = (handler.__class__.__name__, getattr(handler, "baseFilename", None))
@@ -139,6 +147,7 @@ def _add_handler_once(logger: logging.Logger, handler: logging.Handler):
         if h.__class__.__name__ == sig[0] and getattr(h, "baseFilename", None) == sig[1]:
             return
     logger.addHandler(handler)
+
 
 def _hijack_loggers(logger_names, level: int):
     for name in logger_names:
@@ -148,7 +157,7 @@ def _hijack_loggers(logger_names, level: int):
         target.propagate = True
 
 
-def _parse_otel_headers(headers: Union[str, Dict[str, str], None]) -> Optional[Dict[str, str]]:
+def _parse_otel_headers(headers: str | dict[str, str] | None) -> dict[str, str] | None:
     if headers is None:
         env_headers = os.getenv("OTEL_EXPORTER_OTLP_HEADERS")
         headers = env_headers
@@ -156,7 +165,7 @@ def _parse_otel_headers(headers: Union[str, Dict[str, str], None]) -> Optional[D
         return headers
     if not headers:
         return None
-    parsed: Dict[str, str] = {}
+    parsed: dict[str, str] = {}
     for pair in headers.split(","):
         if not pair:
             continue
@@ -171,9 +180,9 @@ def _build_otel_handler(
     *,
     level: int,
     corr_filter: logging.Filter,
-    endpoint: Optional[str],
-    headers: Union[str, Dict[str, str], None],
-) -> Optional[logging.Handler]:
+    endpoint: str | None,
+    headers: str | dict[str, str] | None,
+) -> logging.Handler | None:
     # Use unified OTEL config for endpoint and resource
     resolved_endpoint = endpoint or get_otlp_logs_endpoint()
 
@@ -190,6 +199,7 @@ def _build_otel_handler(
     _OTEL_RUNTIME_REFS.append((provider, processor, handler))
     return handler
 
+
 def setup_logging(
     *,
     app_logger_name: str = "app",
@@ -197,12 +207,12 @@ def setup_logging(
     to_console: bool = True,
     to_file: bool = True,
     file_path: str = "logs/app.log",
-    when: str = "midnight",   # Timed rotating (midnight rollover)
-    backup_count: int = 7,     # keep last 7 files
+    when: str = "midnight",  # Timed rotating (midnight rollover)
+    backup_count: int = 7,  # keep last 7 files
     hijack_uvicorn: bool = True,
     enable_otel: bool = False,
-    otel_endpoint: Optional[str] = None,
-    otel_headers: Union[str, Dict[str, str], None] = None,
+    otel_endpoint: str | None = None,
+    otel_headers: str | dict[str, str] | None = None,
 ) -> logging.Logger:
     """
     Idempotent logging setup. Returns the named app logger.
@@ -231,7 +241,9 @@ def setup_logging(
 
     if to_file:
         _ensure_logs_dir(file_path)
-        fh = TimedRotatingFileHandler(file_path, when=when, backupCount=backup_count, encoding="utf-8")
+        fh = TimedRotatingFileHandler(
+            file_path, when=when, backupCount=backup_count, encoding="utf-8"
+        )
         fh.setLevel(level)
         fh.setFormatter(formatter)
         fh.addFilter(corr_filter)
@@ -262,7 +274,9 @@ def setup_logging(
 
     return logger
 
+
 # ---------- FastAPI middleware helpers ----------
+
 
 async def correlation_id_middleware(request, call_next):
     """
@@ -284,28 +298,28 @@ async def correlation_id_middleware(request, call_next):
 
 def log_llm_call(
     *,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger | None = None,
     logger_name: str = "app",
     event: str = "llm_call_completed",
     level: int = logging.INFO,
-    trace_id: Optional[str] = None,
-    session_id: Optional[str] = None,
-    provider: Optional[str] = None,
-    model_id: Optional[str] = None,
-    request_type: Optional[str] = None,
-    api_endpoint: Optional[str] = None,
-    backend_endpoint: Optional[str] = None,
-    http_status: Optional[int] = None,
-    status: Optional[str] = None,
-    latency_ms: Optional[float] = None,
-    ttft_ms: Optional[float] = None,
-    prompt_tokens: Optional[int] = None,
-    completion_tokens: Optional[int] = None,
-    reasoning_tokens: Optional[int] = None,
-    tokens_per_second: Optional[float] = None,
-    cost_usd: Optional[float] = None,
-    error_msg: Optional[str] = None,
-    extra_fields: Optional[Dict[str, Any]] = None,
+    trace_id: str | None = None,
+    session_id: str | None = None,
+    provider: str | None = None,
+    model_id: str | None = None,
+    request_type: str | None = None,
+    api_endpoint: str | None = None,
+    backend_endpoint: str | None = None,
+    http_status: int | None = None,
+    status: str | None = None,
+    latency_ms: float | None = None,
+    ttft_ms: float | None = None,
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    reasoning_tokens: int | None = None,
+    tokens_per_second: float | None = None,
+    cost_usd: float | None = None,
+    error_msg: str | None = None,
+    extra_fields: dict[str, Any] | None = None,
 ) -> None:
     """
     Emit a structured log describing an LLM provider API call with consistent fields.
@@ -313,9 +327,11 @@ def log_llm_call(
     """
     log = logger or logging.getLogger(logger_name)
     resolved_trace_id = trace_id or get_correlation_id()
-    normalized_request_type = request_type.upper() if isinstance(request_type, str) else request_type
+    normalized_request_type = (
+        request_type.upper() if isinstance(request_type, str) else request_type
+    )
 
-    payload: Dict[str, Any] = {
+    payload: dict[str, Any] = {
         "event": event,
         "trace_id": resolved_trace_id,
         "session_id": session_id,

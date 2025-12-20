@@ -1,19 +1,23 @@
+import contextlib
 import json
+import logging
 import os
 import time
-from functools import partial
-from typing import Any, Dict, Generator, List, Optional, Tuple
+from collections.abc import Generator
+from typing import Any
 
 import gradio as gr
 import httpx
-import logging
+from gradio.themes import Ocean
 
 from services.llm_tools import get_all_tool_schemas
-from ui.styles import BADGES_CSS, TEXTAREA_SCROLL_CSS, ENHANCED_UI_CSS, NOTE_CSS
-from utils.delimiter_utils import RESOLVER_FUNCTIONS, _delim_pair, _insert_pair_at_end, _wrap_entire_message
-from utils.errors import _parse_error_payload, _parse_error_text, _format_api_error_message
+from ui.styles import BADGES_CSS, ENHANCED_UI_CSS, NOTE_CSS, TEXTAREA_SCROLL_CSS
+from utils.delimiter_utils import (
+    _insert_pair_at_end,
+    _wrap_entire_message,
+)
+from utils.errors import _format_api_error_message, _parse_error_payload, _parse_error_text
 from utils.feedback_utils import _on_like_event
-from utils.http import resolve_api_base
 from utils.load_configs import (
     _get_default_endpoint_key,
     _load_delimiter_definitions,
@@ -30,13 +34,18 @@ from utils.message_utils import (
     split_rendered_messages_for_ui,
 )
 from utils.model_params_utils import (
-    _get_model_special_behavior,
     _get_param_values_for_model,
-    get_effective_params_for_model,
 )
+from utils.otel_config import configure_otel_env_vars
 from utils.prompts_client import get_prompt, list_prompts, render_prompt
-from utils.render_formatters import format_prompt_details, format_render_preview, format_render_status
-from utils.response_schema_utils import build_schema_from_template, extract_response_format_from_prompt
+from utils.render_formatters import (
+    format_prompt_details,
+    format_render_status,
+)
+from utils.response_schema_utils import (
+    build_schema_from_template,
+    extract_response_format_from_prompt,
+)
 from utils.session_utils import (
     INACTIVITY_TIMEOUT,
     _ensure_session_state,
@@ -44,12 +53,14 @@ from utils.session_utils import (
     _update_session_from_metrics,
 )
 from utils.ui_formatters import format_metrics_badges
-from utils.otel_config import configure_otel_env_vars
-
 
 MODELS_DATA = _load_models()
 MODEL_LOOKUP = {model["id"]: model for model in MODELS_DATA["models"]}
-DEFAULT_MODEL_ID = "gemini-flash-lite" if "gemini-flash-lite" in MODEL_LOOKUP else next(iter(MODEL_LOOKUP.keys()), None)
+DEFAULT_MODEL_ID = (
+    "gemini-flash-lite"
+    if "gemini-flash-lite" in MODEL_LOOKUP
+    else next(iter(MODEL_LOOKUP.keys()), None)
+)
 
 if DEFAULT_MODEL_ID is None:
     raise RuntimeError("No models configured in config/models.yaml")
@@ -75,11 +86,11 @@ ENDPOINTS = _load_endpoints()
 DEFAULT_ENDPOINT_KEY = _get_default_endpoint_key()
 
 # Load delimiter and schema template configurations
-DELIMITER_DEFINITIONS: Dict[str, Dict[str, Any]] = _load_delimiter_definitions()
-DELIMITER_CHOICES: List[str] = list(DELIMITER_DEFINITIONS.keys())
+DELIMITER_DEFINITIONS: dict[str, dict[str, Any]] = _load_delimiter_definitions()
+DELIMITER_CHOICES: list[str] = list(DELIMITER_DEFINITIONS.keys())
 
-RESPONSE_SCHEMA_TEMPLATES: Dict[str, Dict[str, Any]] = _load_response_schema_templates()
-RESPONSE_SCHEMA_CHOICES: List[str] = list(RESPONSE_SCHEMA_TEMPLATES.keys())
+RESPONSE_SCHEMA_TEMPLATES: dict[str, dict[str, Any]] = _load_response_schema_templates()
+RESPONSE_SCHEMA_CHOICES: list[str] = list(RESPONSE_SCHEMA_TEMPLATES.keys())
 
 DEFAULT_PROMPT_KEY = "bullet-summary"
 TOOL_PROMPT_KEYS = {
@@ -94,26 +105,26 @@ STATEMENT_OPTION_SET = set(STATEMENT_OPTIONS)
 
 def stream_chat(
     user_message: str,
-    history: List[Dict[str, str]],
+    history: list[dict[str, str]],
     model_choice: Any,
     endpoint_choice: Any,
     temperature: float,
     top_p: float,
     max_tokens: int,
-    seed_input: Optional[str],
-    reasoning_effort: Optional[str],
-    verbosity: Optional[str],
-    system_prompt: Optional[str],
-    context_prompt: Optional[str],
+    seed_input: str | None,
+    reasoning_effort: str | None,
+    verbosity: str | None,
+    system_prompt: str | None,
+    context_prompt: str | None,
     response_mode: str,
     strict_schema: bool,
-    schema_code: Optional[str],
-    schema_template: Optional[str] = None,
+    schema_code: str | None,
+    schema_template: str | None = None,
     enable_tools: bool = False,
-    session_state: Optional[Dict[str, Any]] = None,
-) -> Generator[Tuple[List[Dict[str, str]], str, Dict[str, Any]], None, None]:
+    session_state: dict[str, Any] | None = None,
+) -> Generator[tuple[list[dict[str, str]], str, dict[str, Any]], None, None]:
     """Stream chat responses. Always yields values, even for errors.
-    
+
     Returns a 3-tuple on each yield:
         - updated chat history
         - metrics markdown
@@ -121,7 +132,7 @@ def stream_chat(
     """
     history = history or []
     # Sanitize history to only allowed fields and ensure string content
-    sanitized_history: List[Dict[str, str]] = []
+    sanitized_history: list[dict[str, str]] = []
     for m in history:
         if not isinstance(m, dict):
             continue
@@ -133,16 +144,18 @@ def stream_chat(
         role_str = str(role)
         content_str = str(content)
         sanitized_history.append({"role": role_str, "content": content_str})
-    
+
     # Ensure we have a valid session and enforce 15-minute inactivity timeout
-    session_id, session_state_out, started_new_session, session_expired = _ensure_session_state(session_state)
+    session_id, session_state_out, started_new_session, session_expired = _ensure_session_state(
+        session_state
+    )
     if started_new_session:
         # New session -> reset chat history for this conversation
         if session_expired:
             # Only notify user if session actually expired (not first time visit)
             session_expired_msg = {
                 "role": "assistant",
-                "content": f"⚠️ **Session expired**: Your previous session timed out after {INACTIVITY_TIMEOUT} minutes of inactivity. Chat history has been reset. Starting a new conversation."
+                "content": f"⚠️ **Session expired**: Your previous session timed out after {INACTIVITY_TIMEOUT} minutes of inactivity. Chat history has been reset. Starting a new conversation.",
             }
             history = [session_expired_msg]
         else:
@@ -154,7 +167,10 @@ def stream_chat(
     if response_mode == "JSON schema":
         if not schema_code or not schema_code.strip():
             error_msg = "⚠️ JSON schema mode requires a schema. Please enter a valid JSON schema."
-            error_history = history + [{"role": "user", "content": user_message}, {"role": "assistant", "content": error_msg}]
+            error_history = history + [
+                {"role": "user", "content": user_message},
+                {"role": "assistant", "content": error_msg},
+            ]
             yield error_history, format_metrics_badges({}, None, None), session_state_out
             return
         try:
@@ -162,13 +178,21 @@ def stream_chat(
             parsed_schema = json.loads(schema_code.strip())
             # Also validate it's a dict
             if not isinstance(parsed_schema, dict):
-                error_msg = f"⚠️ JSON schema must be an object/dict, got {type(parsed_schema).__name__}."
-                error_history = history + [{"role": "user", "content": user_message}, {"role": "assistant", "content": error_msg}]
+                error_msg = (
+                    f"⚠️ JSON schema must be an object/dict, got {type(parsed_schema).__name__}."
+                )
+                error_history = history + [
+                    {"role": "user", "content": user_message},
+                    {"role": "assistant", "content": error_msg},
+                ]
                 yield error_history, format_metrics_badges({}, None, None), session_state_out
                 return
         except json.JSONDecodeError as e:
             error_msg = f"⚠️ Invalid JSON schema: {str(e)}\n\nPlease check your JSON syntax (missing brackets, commas, etc.)."
-            error_history = history + [{"role": "user", "content": user_message}, {"role": "assistant", "content": error_msg}]
+            error_history = history + [
+                {"role": "user", "content": user_message},
+                {"role": "assistant", "content": error_msg},
+            ]
             yield error_history, format_metrics_badges({}, None, None), session_state_out
             return
 
@@ -176,7 +200,10 @@ def stream_chat(
     model_config = MODEL_LOOKUP.get(normalized_choice) if normalized_choice else None
     if not model_config:
         error_msg = "⚠️ Unknown model selection."
-        error_history = history + [{"role": "user", "content": user_message}, {"role": "assistant", "content": error_msg}]
+        error_history = history + [
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": error_msg},
+        ]
         yield error_history, format_metrics_badges({}, None, None), session_state_out
         return
 
@@ -194,7 +221,10 @@ def stream_chat(
     endpoint_cfg = ENDPOINTS.get(endpoint_key) if endpoint_key else None
     if not endpoint_cfg:
         error_msg = "⚠️ Unknown endpoint selection."
-        error_history = history + [{"role": "user", "content": user_message}, {"role": "assistant", "content": error_msg}]
+        error_history = history + [
+            {"role": "user", "content": user_message},
+            {"role": "assistant", "content": error_msg},
+        ]
         yield error_history, format_metrics_badges({}, None, None), session_state_out
         return
 
@@ -203,14 +233,16 @@ def stream_chat(
     # Gemini (Google) does not support tool calling and structured output simultaneously
     disable_structured_output = enable_tools and provider_key == "google"
 
-    payload_messages = _build_messages(user_message, sanitized_history, system_prompt, context_prompt)
+    payload_messages = _build_messages(
+        user_message, sanitized_history, system_prompt, context_prompt
+    )
 
     api_url = DEFAULT_API_BASE_URL.strip()
     if not api_url:
         api_url = DEFAULT_API_BASE_URL
     endpoint_url = f"{api_url.rstrip('/')}{endpoint_cfg['path']}"
 
-    params: Dict[str, Any] = {
+    params: dict[str, Any] = {
         "temperature": temperature,
         "top_p": top_p,
         "max_tokens": int(max_tokens),
@@ -230,7 +262,13 @@ def stream_chat(
     schema_template_label = _normalize_selection(schema_template) if schema_template else None
     response_format = None
     if not disable_structured_output:
-        response_format = _build_response_format(response_mode, strict_schema, schema_code, schema_template_label, RESPONSE_SCHEMA_TEMPLATES)
+        response_format = _build_response_format(
+            response_mode,
+            strict_schema,
+            schema_code,
+            schema_template_label,
+            RESPONSE_SCHEMA_TEMPLATES,
+        )
     if response_format is not None:
         params["response_format"] = response_format
 
@@ -243,7 +281,10 @@ def stream_chat(
                 params["tool_choice"] = "auto"
         except Exception as e:
             error_msg = f"⚠️ Error loading tools: {str(e)}"
-            error_history = history + [{"role": "user", "content": user_message}, {"role": "assistant", "content": error_msg}]
+            error_history = history + [
+                {"role": "user", "content": user_message},
+                {"role": "assistant", "content": error_msg},
+            ]
             yield error_history, format_metrics_badges({}, None, None), session_state_out
             return
 
@@ -252,15 +293,17 @@ def stream_chat(
         "model_id": model_config["id"],
         "messages": payload_messages,
         "params": params,
-        "context_prompt": context_prompt.strip() if context_prompt and context_prompt.strip() else None,
+        "context_prompt": context_prompt.strip()
+        if context_prompt and context_prompt.strip()
+        else None,
         # Note: backend ChatRequest will be extended to accept this field
         "session_id": session_id,
     }
 
     # Add current user message to history
     running_history = history + [{"role": "user", "content": user_message}]
-    ttft_ms: Optional[float] = None
-    metrics: Dict[str, Any] = {}
+    ttft_ms: float | None = None
+    metrics: dict[str, Any] = {}
     start_time = time.perf_counter()
 
     # Emit initial state to display user message immediately.
@@ -302,9 +345,17 @@ def stream_chat(
                                                 error_status = status
                                             if message:
                                                 error_detail = message
-                                    error_msg = _format_api_error_message(error_status, error_detail)
-                                    running_history.append({"role": "assistant", "content": error_msg})
-                                    yield running_history, format_metrics_badges(metrics, ttft_ms, None), session_state_out
+                                    error_msg = _format_api_error_message(
+                                        error_status, error_detail
+                                    )
+                                    running_history.append(
+                                        {"role": "assistant", "content": error_msg}
+                                    )
+                                    yield (
+                                        running_history,
+                                        format_metrics_badges(metrics, ttft_ms, None),
+                                        session_state_out,
+                                    )
                                     return
                                 if "event: metrics" in event_str:
                                     for line in event_str.split("\n"):
@@ -314,14 +365,14 @@ def stream_chat(
                                                 metrics.clear()
                                                 metrics.update(metrics_data)
                                                 # Update session_state if session_id is in metrics
-                                                session_state_out = _update_session_from_metrics(metrics, session_state_out)
+                                                session_state_out = _update_session_from_metrics(
+                                                    metrics, session_state_out
+                                                )
                                                 # Attach trace_id (if present) to the main assistant message
                                                 running_history = _record_trace_id_from_metrics(
                                                     running_history,
                                                     metrics,
                                                     session_state_out,
-                                                    logger=ui_logger,
-                                                    source="sse_metrics_event",
                                                 )
                                             except json.JSONDecodeError:
                                                 pass
@@ -333,8 +384,14 @@ def stream_chat(
                                             tool_msg = line[6:].strip()
                                             if tool_msg:
                                                 # Add tool execution message to history
-                                                running_history.append({"role": "assistant", "content": tool_msg})
-                                                yield running_history, format_metrics_badges(metrics, ttft_ms, None), session_state_out
+                                                running_history.append(
+                                                    {"role": "assistant", "content": tool_msg}
+                                                )
+                                                yield (
+                                                    running_history,
+                                                    format_metrics_badges(metrics, ttft_ms, None),
+                                                    session_state_out,
+                                                )
                                     continue
                                 if "event: message" in event_str:
                                     data_lines = []
@@ -358,18 +415,29 @@ def stream_chat(
                                     last_msg = running_history[-1] if running_history else {}
                                     is_tool_status = last_msg.get("content", "").startswith("🔧")
                                     if running_history[-1].get("role") == "user" or is_tool_status:
-                                        running_history.append({"role": "assistant", "content": accumulated_response})
+                                        running_history.append(
+                                            {"role": "assistant", "content": accumulated_response}
+                                        )
                                     else:
                                         # Preserve any metadata (trace_id, feedback state) when updating content
                                         if isinstance(running_history[-1], dict):
                                             running_history[-1]["content"] = accumulated_response
                                         else:
-                                            running_history[-1] = {"role": "assistant", "content": accumulated_response}
+                                            running_history[-1] = {
+                                                "role": "assistant",
+                                                "content": accumulated_response,
+                                            }
                                     latency_now = (time.perf_counter() - start_time) * 1000.0
-                                    yield running_history, format_metrics_badges(metrics, ttft_ms, latency_now), session_state_out
+                                    yield (
+                                        running_history,
+                                        format_metrics_badges(metrics, ttft_ms, latency_now),
+                                        session_state_out,
+                                    )
                         # Process any remaining buffer content (incomplete final event)
                         if not done and sse_buffer.strip():
-                            event_str = sse_buffer.lstrip()  # Only strip leading whitespace to preserve trailing spaces in data
+                            event_str = (
+                                sse_buffer.lstrip()
+                            )  # Only strip leading whitespace to preserve trailing spaces in data
                             # Process metrics events
                             if "event: error" in event_str:
                                 error_status = None
@@ -383,7 +451,11 @@ def stream_chat(
                                             error_detail = message
                                 error_msg = _format_api_error_message(error_status, error_detail)
                                 running_history.append({"role": "assistant", "content": error_msg})
-                                yield running_history, format_metrics_badges(metrics, ttft_ms, None), session_state_out
+                                yield (
+                                    running_history,
+                                    format_metrics_badges(metrics, ttft_ms, None),
+                                    session_state_out,
+                                )
                                 return
                             if "event: metrics" in event_str:
                                 for line in event_str.split("\n"):
@@ -393,14 +465,14 @@ def stream_chat(
                                             metrics.clear()
                                             metrics.update(metrics_data)
                                             # Update session_state if session_id is in metrics
-                                            session_state_out = _update_session_from_metrics(metrics, session_state_out)
+                                            session_state_out = _update_session_from_metrics(
+                                                metrics, session_state_out
+                                            )
                                             # Attach trace_id (if present) to the main assistant message
                                             running_history = _record_trace_id_from_metrics(
                                                 running_history,
                                                 metrics,
                                                 session_state_out,
-                                                logger=ui_logger,
-                                                source="sse_final_buffer",
                                             )
                                         except json.JSONDecodeError:
                                             pass
@@ -410,8 +482,14 @@ def stream_chat(
                                     if line.startswith("data: "):
                                         tool_msg = line[6:].strip()
                                         if tool_msg:
-                                            running_history.append({"role": "assistant", "content": tool_msg})
-                                            yield running_history, format_metrics_badges(metrics, ttft_ms, None), session_state_out
+                                            running_history.append(
+                                                {"role": "assistant", "content": tool_msg}
+                                            )
+                                            yield (
+                                                running_history,
+                                                format_metrics_badges(metrics, ttft_ms, None),
+                                                session_state_out,
+                                            )
                             # Also process message events in the final buffer
                             elif "event: message" in event_str:
                                 data_lines = []
@@ -426,14 +504,14 @@ def stream_chat(
                                 if new_text:
                                     if ttft_ms is None:
                                         ttft_ms = (time.perf_counter() - start_time) * 1000.0
-                                    
+
                                     # Check if this is a tool execution log
                                     # Tool logs usually start with "🔧" or contain specific markers
                                     # But in our backend, tool logs are currently just part of the text stream or separate messages
                                     # We need to append them to history carefully
-                                    
+
                                     accumulated_response += new_text
-                                    
+
                                     # Update assistant response in messages format
                                     # If last message is user (first chunk), append new assistant message
                                     # If last message is a tool_status message, append new assistant message to preserve tool message
@@ -441,51 +519,70 @@ def stream_chat(
                                     last_msg = running_history[-1] if running_history else {}
                                     is_tool_status = last_msg.get("content", "").startswith("🔧")
                                     if running_history[-1].get("role") == "user" or is_tool_status:
-                                        running_history.append({"role": "assistant", "content": accumulated_response})
+                                        running_history.append(
+                                            {"role": "assistant", "content": accumulated_response}
+                                        )
                                     else:
                                         if isinstance(running_history[-1], dict):
                                             running_history[-1]["content"] = accumulated_response
                                         else:
-                                            running_history[-1] = {"role": "assistant", "content": accumulated_response}
+                                            running_history[-1] = {
+                                                "role": "assistant",
+                                                "content": accumulated_response,
+                                            }
                                     latency_now = (time.perf_counter() - start_time) * 1000.0
-                                    yield running_history, format_metrics_badges(metrics, ttft_ms, latency_now), session_state_out
+                                    yield (
+                                        running_history,
+                                        format_metrics_badges(metrics, ttft_ms, latency_now),
+                                        session_state_out,
+                                    )
                     else:
                         for chunk in response.iter_text():
                             if not chunk:
                                 continue
                             json_payload = None
                             if chunk.startswith("\n{"):
-                                try:
+                                with contextlib.suppress(json.JSONDecodeError):
                                     json_payload = json.loads(chunk.strip())
-                                except json.JSONDecodeError:
-                                    pass
                             if isinstance(json_payload, dict):
                                 if "error" in json_payload:
                                     status, detail = _parse_error_payload(json_payload)
                                     error_msg = _format_api_error_message(status, detail)
-                                    running_history.append({"role": "assistant", "content": error_msg})
-                                    yield running_history, format_metrics_badges(metrics, ttft_ms, None), session_state_out
+                                    running_history.append(
+                                        {"role": "assistant", "content": error_msg}
+                                    )
+                                    yield (
+                                        running_history,
+                                        format_metrics_badges(metrics, ttft_ms, None),
+                                        session_state_out,
+                                    )
                                     return
                                 if "metrics" in json_payload:
                                     metrics_obj = json_payload.get("metrics", json_payload)
                                     metrics = metrics_obj
-                                    session_state_out = _update_session_from_metrics(metrics, session_state_out)
+                                    session_state_out = _update_session_from_metrics(
+                                        metrics, session_state_out
+                                    )
                                     running_history = _record_trace_id_from_metrics(
                                         running_history,
                                         metrics,
                                         session_state_out,
-                                        logger=ui_logger,
-                                        source="raw_stream_metrics",
                                     )
                                     continue
                                 if "tool_status" in json_payload:
                                     tool_msg = json_payload.get("tool_status", "")
                                     if tool_msg:
-                                        running_history.append({"role": "assistant", "content": tool_msg})
-                                        yield running_history, format_metrics_badges(metrics, ttft_ms, None), session_state_out
+                                        running_history.append(
+                                            {"role": "assistant", "content": tool_msg}
+                                        )
+                                        yield (
+                                            running_history,
+                                            format_metrics_badges(metrics, ttft_ms, None),
+                                            session_state_out,
+                                        )
                                     continue
                                 continue
-                            
+
                             if ttft_ms is None:
                                 ttft_ms = (time.perf_counter() - start_time) * 1000.0
 
@@ -497,38 +594,51 @@ def stream_chat(
                             last_msg = running_history[-1] if running_history else {}
                             is_tool_status = last_msg.get("content", "").startswith("🔧")
                             if running_history[-1].get("role") == "user" or is_tool_status:
-                                running_history.append({"role": "assistant", "content": accumulated_response})
+                                running_history.append(
+                                    {"role": "assistant", "content": accumulated_response}
+                                )
                             else:
                                 if isinstance(running_history[-1], dict):
                                     running_history[-1]["content"] = accumulated_response
                                 else:
-                                    running_history[-1] = {"role": "assistant", "content": accumulated_response}
+                                    running_history[-1] = {
+                                        "role": "assistant",
+                                        "content": accumulated_response,
+                                    }
                             latency_now = (time.perf_counter() - start_time) * 1000.0
-                            yield running_history, format_metrics_badges(metrics, ttft_ms, latency_now), session_state_out
+                            yield (
+                                running_history,
+                                format_metrics_badges(metrics, ttft_ms, latency_now),
+                                session_state_out,
+                            )
             else:
                 # Non-streaming endpoint
                 response = client.post(endpoint_url, json=request_body)
                 response.raise_for_status()
                 data = response.json()
-                
+
                 # Extract text, metrics, and tool messages from response
                 text = data.get("text")
                 metrics = data.get("metrics", {})
                 tool_messages = data.get("tool_messages", [])  # Backend-formatted tool messages
-                
+
                 # Add tool execution messages before the assistant response (from backend)
                 if tool_messages:
                     for tool_msg in tool_messages:
-                        running_history.append({
-                            "role": "assistant",
-                            "content": tool_msg
-                        })
-                
+                        running_history.append({"role": "assistant", "content": tool_msg})
+
                 # Handle text response - always use text if it exists, even if empty
                 if text is not None:
-                    running_history.append({"role": "assistant", "content": str(text) if text else "⚠️ Empty response body."})
+                    running_history.append(
+                        {
+                            "role": "assistant",
+                            "content": str(text) if text else "⚠️ Empty response body.",
+                        }
+                    )
                 else:
-                    running_history.append({"role": "assistant", "content": "⚠️ Empty response body."})
+                    running_history.append(
+                        {"role": "assistant", "content": "⚠️ Empty response body."}
+                    )
 
                 # Warn if reasoning tokens likely consumed the budget leaving no visible output
                 if metrics.get("reasoning_tokens", 0) > 0:
@@ -538,12 +648,16 @@ def stream_chat(
                             "⚠️ All available tokens were used for reasoning, so no visible answer was returned. "
                             "Try increasing max tokens or lowering reasoning_effort."
                         )
-                        warning_entry = {"role": "assistant", "content": warning_msg, "likeable": False}
+                        warning_entry = {
+                            "role": "assistant",
+                            "content": warning_msg,
+                            "likeable": False,
+                        }
                         if running_history and running_history[-1].get("role") == "assistant":
                             running_history[-1] = warning_entry
                         else:
                             running_history.append(warning_entry)
-                
+
                 # Update session_state if session_id is in metrics
                 session_state_out = _update_session_from_metrics(metrics, session_state_out)
                 # Attach trace_id (if present) to the main assistant message
@@ -551,14 +665,16 @@ def stream_chat(
                     running_history,
                     metrics,
                     session_state_out,
-                    logger=ui_logger,
-                    source="non_stream_response",
                 )
 
                 if ttft_ms is None and metrics.get("ttft_ms") is not None:
                     ttft_ms = metrics["ttft_ms"]
                 final_latency = (time.perf_counter() - start_time) * 1000.0
-                yield running_history, format_metrics_badges(metrics, ttft_ms, final_latency), session_state_out
+                yield (
+                    running_history,
+                    format_metrics_badges(metrics, ttft_ms, final_latency),
+                    session_state_out,
+                )
                 return
 
     except httpx.HTTPStatusError as http_err:
@@ -678,9 +794,8 @@ def stream_chat(
     yield running_history, format_metrics_badges(metrics, ttft_ms, final_latency), session_state_out
 
 
-
-
 # --- Helpers (moved out of build_demo) ---------------------------------------
+
 
 def sync_delimiter_inputs(selected_style: str):
     definition = DELIMITER_DEFINITIONS.get(selected_style or "")
@@ -713,7 +828,7 @@ def clear_chat_and_metrics():
     return [], format_metrics_badges({}, None, None), "", "", "", "None"
 
 
-def on_schema_template_change(template_label: str, current_strict: bool) -> Tuple[str, bool]:
+def on_schema_template_change(template_label: str, current_strict: bool) -> tuple[str, bool]:
     """Handle schema template selection via utils."""
     return build_schema_from_template(template_label, RESPONSE_SCHEMA_TEMPLATES, current_strict)
 
@@ -724,13 +839,13 @@ def reset_textbox():
 
 def update_params_for_model(model_choice: Any):
     """Update all parameter UI components based on selected model.
-    
+
     This is a generic function that:
     1. Looks up the model's params_override from models.yaml
     2. Merges with defaults to get effective params
     3. Applies special behavior rules (e.g., fixed values, disabled UI)
     4. Returns updates for all parameter UI components
-    
+
     Returns:
         Tuple of gr.update() calls for all parameter UI components in order:
         (temperature_slider, top_p_slider, max_tokens_slider, seed_textbox,
@@ -738,7 +853,7 @@ def update_params_for_model(model_choice: Any):
     """
     normalized_choice = _normalize_selection(model_choice)
     params = _get_param_values_for_model(normalized_choice, MODELS_DATA, MODEL_LOOKUP)
-    
+
     return (
         gr.update(**params["temperature"]),
         gr.update(value=params["top_p"]["value"]),
@@ -772,8 +887,8 @@ def _generation_help_text(model_choice: Any) -> str:
 
     if is_gpt5:
         base_text += (
-        "- **Reasoning effort** – controls how much deliberate thinking the model uses (higher improves logic but increases cost/latency).\n"
-        "- **Verbosity** – controls how detailed the response is (low = concise, high = more explanation and context).\n"
+            "- **Reasoning effort** – controls how much deliberate thinking the model uses (higher improves logic but increases cost/latency).\n"
+            "- **Verbosity** – controls how detailed the response is (low = concise, high = more explanation and context).\n"
         )
 
     return base_text
@@ -784,16 +899,16 @@ def fetch_prompts():
     try:
         api_url = DEFAULT_API_BASE_URL
         prompts = list_prompts(api_url)
-        
+
         # Create choices for dropdown: (label, prompt_id)
         # Use current schema field names (id, key) and allow technique_key for label fallback
         choices = []
         preferred_default = None
         fallback_default = None
         for p in prompts:
-            prompt_id = p.get('id')
-            prompt_key = p.get('key') or p.get('technique_key', 'unknown')
-            prompt_title = p.get('title', 'Untitled')
+            prompt_id = p.get("id")
+            prompt_key = p.get("key") or p.get("technique_key", "unknown")
+            prompt_title = p.get("title", "Untitled")
             if prompt_id:
                 choices.append((f"{prompt_title} ({prompt_key})", str(prompt_id)))
                 str_prompt_id = str(prompt_id)
@@ -801,14 +916,16 @@ def fetch_prompts():
                     preferred_default = str_prompt_id
                 if fallback_default is None and prompt_key not in TOOL_PROMPT_KEYS:
                     fallback_default = str_prompt_id
-        
-        default_value = preferred_default or fallback_default or (choices[0][1] if choices else None)
+
+        default_value = (
+            preferred_default or fallback_default or (choices[0][1] if choices else None)
+        )
         return gr.update(choices=choices, value=default_value)
-    except Exception as e:
+    except Exception:
         return gr.update(choices=[("Error loading prompts", None)], value=None)
 
 
-def _prompt_requires_tools(prompt: Optional[Dict[str, Any]]) -> bool:
+def _prompt_requires_tools(prompt: dict[str, Any] | None) -> bool:
     """Return True if the prompt should auto-enable tool calling."""
     if not isinstance(prompt, dict):
         return False
@@ -819,7 +936,7 @@ def _prompt_requires_tools(prompt: Optional[Dict[str, Any]]) -> bool:
     return prompt_key in TOOL_PROMPT_KEYS
 
 
-def _default_statements_selection(default_value: Optional[Any]) -> List[str]:
+def _default_statements_selection(default_value: Any | None) -> list[str]:
     """Return checkbox defaults for the statements selector based on template defaults."""
     if default_value is None or default_value == "":
         return STATEMENT_OPTIONS.copy()
@@ -844,7 +961,7 @@ def _default_statements_selection(default_value: Optional[Any]) -> List[str]:
     return []
 
 
-def _normalize_statements_selection(selection: Any) -> List[str]:
+def _normalize_statements_selection(selection: Any) -> list[str]:
     """Normalize checkbox selections (list/str) into canonical lowercase values."""
     if selection is None:
         return []
@@ -854,7 +971,7 @@ def _normalize_statements_selection(selection: Any) -> List[str]:
         candidates = selection
     else:
         return []
-    normalized: List[str] = []
+    normalized: list[str] = []
     for candidate in candidates:
         value = str(candidate).strip().lower()
         if value in STATEMENT_OPTION_SET and value not in normalized:
@@ -862,10 +979,9 @@ def _normalize_statements_selection(selection: Any) -> List[str]:
     return normalized
 
 
-
-def paste_template_to_input(rendered_json: str, prompt_id: str = None):
+def paste_template_to_input(rendered_json: str, prompt_id: str | None = None):
     """Parse the rendered JSON and distribute messages to appropriate fields.
-    
+
     - System messages -> system_prompt_box
     - User messages -> user_input (combined)
     - Other messages -> included in user_input with role markers
@@ -873,7 +989,7 @@ def paste_template_to_input(rendered_json: str, prompt_id: str = None):
     """
     if not rendered_json or not rendered_json.strip():
         return "", "", "None", ""
-    
+
     try:
         messages = json.loads(rendered_json)
         if not isinstance(messages, list):
@@ -886,7 +1002,7 @@ def paste_template_to_input(rendered_json: str, prompt_id: str = None):
         # Fetch prompt details to get response_format and json_schema_template
         response_mode = "None"
         schema_code = ""
-        
+
         if prompt_id:
             try:
                 api_url = DEFAULT_API_BASE_URL
@@ -899,16 +1015,16 @@ def paste_template_to_input(rendered_json: str, prompt_id: str = None):
     except json.JSONDecodeError:
         # If it's not valid JSON, return empty
         return "", "", "None", ""
-    except Exception as e:
+    except Exception:
         return "", "", "None", ""
 
 
 def submit_chat_generator(*args):
-    for value in stream_chat(*args):
-        yield value
+    yield from stream_chat(*args)
 
 
 # --- Main UI builder ---------------------------------------------------------
+
 
 def build_demo() -> gr.Blocks:
     models_choices = [
@@ -919,14 +1035,12 @@ def build_demo() -> gr.Blocks:
         for model in MODELS_DATA["models"]
     ]
     endpoint_choices = [
-        (endpoint_cfg["label"], endpoint_key)
-        for endpoint_key, endpoint_cfg in ENDPOINTS.items()
+        (endpoint_cfg["label"], endpoint_key) for endpoint_key, endpoint_cfg in ENDPOINTS.items()
     ]
-    defaults = MODELS_DATA["defaults"]
 
     with gr.Blocks(
         css=BADGES_CSS + TEXTAREA_SCROLL_CSS + ENHANCED_UI_CSS + NOTE_CSS,
-        theme=gr.themes.Ocean(primary_hue="emerald"),
+        theme=Ocean(primary_hue="emerald"),
         title="Prompt Engineering Playground",
     ) as demo:
         gr.Markdown(
@@ -943,10 +1057,10 @@ def build_demo() -> gr.Blocks:
                     type="messages",
                     show_copy_button=True,
                     # avatar_images: [user, assistant]; None = no avatar
-                    avatar_images=[
+                    avatar_images=(
                         None,  # no user icon
                         "utils/icons/icons8-bot-96.png",  # assistant icon only
-                    ],
+                    ),
                 )
                 user_input = gr.Textbox(
                     label="Your message",
@@ -957,9 +1071,7 @@ def build_demo() -> gr.Blocks:
                     elem_classes=["scroll-text"],
                 )
                 with gr.Row():
-                    send_button = gr.Button(
-                        "Send", variant="primary", elem_id="send-button"
-                    )
+                    send_button = gr.Button("Send", variant="primary", elem_id="send-button")
                     clear_button = gr.Button("Clear", variant="secondary")
 
                 metrics_display = gr.Markdown(
@@ -990,10 +1102,10 @@ def build_demo() -> gr.Blocks:
                         # NOTE: In Gradio 5.x, inputs come first, then gr.LikeData is
                         # auto-injected based on the type hint (not position).
                         def _like_handler(
-                            history: List[Dict[str, Any]],
-                            session: Optional[Dict[str, Any]],
+                            history: list[dict[str, Any]],
+                            session: dict[str, Any] | None,
                             evt: gr.LikeData,
-                        ) -> List[Dict[str, Any]]:
+                        ) -> list[dict[str, Any]]:
                             # Skip feedback only on the targeted message if it's a warning
                             idx = getattr(evt, "index", None)
                             if (
@@ -1031,8 +1143,10 @@ def build_demo() -> gr.Blocks:
                             )
                             with gr.Row():
                                 # Initialize parameters based on default model (merge defaults with params_override)
-                                initial_params = _get_param_values_for_model(DEFAULT_MODEL_ID, MODELS_DATA, MODEL_LOOKUP)
-                                
+                                initial_params = _get_param_values_for_model(
+                                    DEFAULT_MODEL_ID, MODELS_DATA, MODEL_LOOKUP
+                                )
+
                                 temperature_slider = gr.Slider(
                                     label=initial_params["temperature"]["label"],
                                     minimum=0.0,
@@ -1041,7 +1155,7 @@ def build_demo() -> gr.Blocks:
                                     value=initial_params["temperature"]["value"],
                                     interactive=initial_params["temperature"]["interactive"],
                                 )
-                                
+
                                 top_p_slider = gr.Slider(
                                     label="Top-p",
                                     minimum=0.0,
@@ -1057,7 +1171,7 @@ def build_demo() -> gr.Blocks:
                                     step=1,
                                     value=initial_params["max_tokens"]["value"],
                                 )
-                                
+
                                 seed_text = gr.Textbox(
                                     label="Seed (optional)",
                                     placeholder="e.g. 42",
@@ -1072,7 +1186,7 @@ def build_demo() -> gr.Blocks:
                                     value=initial_params["reasoning_effort"]["value"],
                                     visible=initial_params["reasoning_effort"]["visible"],
                                 )
-                                
+
                                 verbosity_dd = gr.Dropdown(
                                     label="Verbosity (GPT-5 models only)",
                                     choices=["low", "medium", "high"],
@@ -1114,7 +1228,7 @@ def build_demo() -> gr.Blocks:
                                     label="JSON schema",
                                     language="json",
                                     value='{\n  "type": "object",\n  "additionalProperties": false,\n'
-                                          '  "properties": {},\n  "required": []\n}',
+                                    '  "properties": {},\n  "required": []\n}',
                                     visible=False,
                                     lines=12,
                                     max_lines=20,
@@ -1137,9 +1251,13 @@ def build_demo() -> gr.Blocks:
                                 )
 
                                 # Handler for schema template selection
-                                def on_schema_template_select(template_label: str, current_strict: bool):
+                                def on_schema_template_select(
+                                    template_label: str, current_strict: bool
+                                ):
                                     """Handle template selection and update schema code and strict checkbox."""
-                                    schema_json, strict_val = on_schema_template_change(template_label, current_strict)
+                                    schema_json, strict_val = on_schema_template_change(
+                                        template_label, current_strict
+                                    )
                                     return (
                                         gr.update(value=schema_json),  # schema_code
                                         gr.update(value=strict_val),  # strict_ckb
@@ -1218,9 +1336,7 @@ def build_demo() -> gr.Blocks:
                                     insert_delim_btn = gr.Button(
                                         "Insert at end", variant="secondary"
                                     )
-                                    wrap_all_btn = gr.Button(
-                                        "Wrap all text", variant="secondary"
-                                    )
+                                    wrap_all_btn = gr.Button("Wrap all text", variant="secondary")
 
                                 insert_delim_btn.click(
                                     handle_insert_end,
@@ -1256,29 +1372,28 @@ def build_demo() -> gr.Blocks:
                                 "- Click **Render Template** to preview, then **Paste template** to send to chat.\n"
                                 "- **Advanced JSON**: toggle to edit the raw variables JSON directly."
                             )
-                            
+
                             # Maximum number of variables to support (can be increased if needed)
                             MAX_VARIABLES = 6
-                            
+
                             # Advanced/Simple toggle
                             advanced_mode_ckb = gr.Checkbox(
                                 label="Advanced JSON",
                                 value=False,
                                 # elem_classes=["enhanced-ui-checkbox"],
                             )
-                            
+
                             prompt_dropdown = gr.Dropdown(
                                 label="Select Prompt",
                                 choices=[],
                                 value=None,
                                 interactive=True,
                             )
-                            
+
                             prompt_description = gr.Markdown(
-                                value="Select a prompt to see its details.",
-                                label="Prompt Details"
+                                value="Select a prompt to see its details.", label="Prompt Details"
                             )
-                            
+
                             variables_json = gr.Code(
                                 label="Variables (JSON)",
                                 language="json",
@@ -1286,7 +1401,7 @@ def build_demo() -> gr.Blocks:
                                 lines=8,
                                 visible=False,  # hidden in Simple mode by default
                             )
-                            
+
                             # --- Simple mode inputs (auto-built from variables) ---
                             with gr.Group(visible=True) as simple_mode_group:
                                 # Dynamically create variable textboxes based on MAX_VARIABLES
@@ -1294,12 +1409,14 @@ def build_demo() -> gr.Blocks:
                                 var_value_tb_list = []
                                 for i in range(MAX_VARIABLES):
                                     var_name_hidden_list.append(gr.Textbox(visible=False))
-                                    var_value_tb_list.append(gr.Textbox(
-                                        label=f"var_{i+1}",
-                                        lines=3,
-                                        visible=False,
-                                        elem_classes=["scroll-text"]
-                                    ))
+                                    var_value_tb_list.append(
+                                        gr.Textbox(
+                                            label=f"var_{i + 1}",
+                                            lines=3,
+                                            visible=False,
+                                            elem_classes=["scroll-text"],
+                                        )
+                                    )
                                 statements_selector = gr.CheckboxGroup(
                                     label="Financial statements to include",
                                     choices=STATEMENT_OPTIONS,
@@ -1307,28 +1424,23 @@ def build_demo() -> gr.Blocks:
                                     visible=False,
                                     info="Choose which statements get_fmp_company_data should request (income, balance). Leave empty for profile only.",
                                 )
-                            
+
                             with gr.Row():
-                                render_btn = gr.Button(
-                                    "Render Template", variant="primary"
-                                )
-                                paste_btn = gr.Button(
-                                    "Paste template", variant="secondary"
-                                )
+                                render_btn = gr.Button("Render Template", variant="primary")
+                                paste_btn = gr.Button("Paste template", variant="secondary")
                             # This button appears only for few_shot technique
                             paste_examples_btn = gr.Button(
                                 "Paste examples to Context", variant="secondary", visible=False
                             )
-                            
+
                             rendered_output = gr.Textbox(
                                 label="Rendered Template",
                                 lines=10,
                                 interactive=False,
-                                placeholder="Rendered template will appear here..."
-                                ,
+                                placeholder="Rendered template will appear here...",
                                 elem_classes=["scroll-text"],
                             )
-                            
+
                             # Hidden component to store raw JSON for pasting
                             rendered_json_hidden = gr.Textbox(
                                 visible=False,
@@ -1339,12 +1451,9 @@ def build_demo() -> gr.Blocks:
                                 visible=False,
                                 elem_classes=["scroll-text"],
                             )
-                            
-                            render_status = gr.Markdown(
-                                value="",
-                                label="Render Status"
-                            )
-                            
+
+                            render_status = gr.Markdown(value="", label="Render Status")
+
                             # --- Functions for Simple/Advanced behavior -----------
                             def load_prompt_details_and_simple_fields(prompt_id: str):
                                 """Load prompt details, JSON defaults, and configure simple-mode fields."""
@@ -1357,14 +1466,22 @@ def build_demo() -> gr.Blocks:
                                     ]
                                     # Clear all variable fields
                                     for i in range(MAX_VARIABLES):
-                                        reset_updates.extend([
-                                            gr.update(value=""),
-                                            gr.update(visible=False, label=f"var_{i+1}", value="")
-                                        ])
-                                    reset_updates.append(gr.update(visible=False, value=[]))  # statements selector
-                                    reset_updates.append(gr.update(visible=False))  # paste_examples_btn visibility
+                                        reset_updates.extend(
+                                            [
+                                                gr.update(value=""),
+                                                gr.update(
+                                                    visible=False, label=f"var_{i + 1}", value=""
+                                                ),
+                                            ]
+                                        )
+                                    reset_updates.append(
+                                        gr.update(visible=False, value=[])
+                                    )  # statements selector
+                                    reset_updates.append(
+                                        gr.update(visible=False)
+                                    )  # paste_examples_btn visibility
                                     return tuple(reset_updates)
-                                
+
                                 try:
                                     api_url = DEFAULT_API_BASE_URL
                                     prompt = get_prompt(api_url, prompt_id)
@@ -1374,25 +1491,35 @@ def build_demo() -> gr.Blocks:
                                     examples_text = ""
                                     if examples:
                                         try:
-                                            examples_text = "[EXAMPLES]\n\n" + json.dumps(examples, indent=2)
+                                            examples_text = "[EXAMPLES]\n\n" + json.dumps(
+                                                examples, indent=2
+                                            )
                                         except Exception:
                                             examples_text = "[EXAMPLES]\n\n" + str(examples)
                                     # Determine technique for button visibility
-                                    technique_val = (prompt.get("technique") or prompt.get("technique_key") or "").strip().lower()
+                                    technique_val = (
+                                        (
+                                            prompt.get("technique")
+                                            or prompt.get("technique_key")
+                                            or ""
+                                        )
+                                        .strip()
+                                        .lower()
+                                    )
                                     show_examples_btn = technique_val == "few_shot"
                                     # Build variable fields strictly from template variables
                                     variables = prompt.get("variables", []) or []
                                     num_vars = len(variables)
-                                    statements_default_value: Optional[Any] = None
+                                    statements_default_value: Any | None = None
                                     statements_field_present = False
-                                    
+
                                     # Helper to build updates for one slot
                                     def slot_updates(var_def):
                                         nonlocal statements_default_value, statements_field_present
                                         if var_def:
                                             label = var_def.get("name") or "variable"
                                             default_val = var_def.get("default", "")
-                                            hide_statements_flag = (label == STATEMENTS_VARIABLE)
+                                            hide_statements_flag = label == STATEMENTS_VARIABLE
                                             if hide_statements_flag:
                                                 statements_field_present = True
                                                 statements_default_value = default_val
@@ -1405,26 +1532,33 @@ def build_demo() -> gr.Blocks:
                                                 ),
                                             )
                                         else:
-                                            return gr.update(value=""), gr.update(visible=False, label="var", value="")
-                                    
+                                            return gr.update(value=""), gr.update(
+                                                visible=False, label="var", value=""
+                                            )
+
                                     # Build updates for all slots
                                     updates = [
                                         gr.update(value=description_text),
                                         gr.update(value=defaults_json),
                                         gr.update(value=examples_text),
                                     ]
-                                    
+
                                     # Update visible slots based on actual variables
                                     for i in range(MAX_VARIABLES):
                                         var_def = variables[i] if i < num_vars else None
                                         updates.extend(slot_updates(var_def))
-                                    
+
                                     statements_visible = statements_field_present
                                     statements_default = (
                                         _default_statements_selection(statements_default_value)
-                                        if statements_visible else []
+                                        if statements_visible
+                                        else []
                                     )
-                                    updates.append(gr.update(visible=statements_visible, value=statements_default))
+                                    updates.append(
+                                        gr.update(
+                                            visible=statements_visible, value=statements_default
+                                        )
+                                    )
                                     updates.append(gr.update(visible=show_examples_btn))
                                     return tuple(updates)
                                 except Exception as e:
@@ -1436,21 +1570,25 @@ def build_demo() -> gr.Blocks:
                                     ]
                                     # Clear all variable fields on error
                                     for i in range(MAX_VARIABLES):
-                                        error_updates.extend([
-                                            gr.update(value=""),
-                                            gr.update(visible=False, label=f"var_{i+1}", value="")
-                                        ])
+                                        error_updates.extend(
+                                            [
+                                                gr.update(value=""),
+                                                gr.update(
+                                                    visible=False, label=f"var_{i + 1}", value=""
+                                                ),
+                                            ]
+                                        )
                                     error_updates.append(gr.update(visible=False, value=[]))
                                     error_updates.append(gr.update(visible=False))
                                     return tuple(error_updates)
-                            
+
                             def toggle_advanced_mode(is_advanced: bool):
                                 """Show/hide simple inputs vs raw JSON editor."""
                                 return (
-                                    gr.update(visible=is_advanced),   # variables_json
+                                    gr.update(visible=is_advanced),  # variables_json
                                     gr.update(visible=not is_advanced),  # simple_mode_group
                                 )
-                            
+
                             def render_template_with_modes(
                                 prompt_id: str,
                                 is_advanced: bool,
@@ -1467,14 +1605,19 @@ def build_demo() -> gr.Blocks:
                                         var_inputs = var_inputs[:-1]
                                     statements_selection = (
                                         _normalize_statements_selection(statements_selection_raw)
-                                        if not is_advanced else []
+                                        if not is_advanced
+                                        else []
                                     )
-                                    
+
                                     api_url = DEFAULT_API_BASE_URL
                                     if is_advanced:
                                         # Use JSON as-is
                                         try:
-                                            variables = json.loads(variables_json_str) if variables_json_str.strip() else {}
+                                            variables = (
+                                                json.loads(variables_json_str)
+                                                if variables_json_str.strip()
+                                                else {}
+                                            )
                                         except json.JSONDecodeError as e:
                                             return "", "", f"⚠️ Invalid JSON in variables: {str(e)}"
                                     else:
@@ -1484,13 +1627,19 @@ def build_demo() -> gr.Blocks:
                                         # Process pairs: each pair is (name, value)
                                         num_pairs = len(var_inputs) // 2
                                         for i in range(num_pairs):
-                                            var_name = var_inputs[i * 2] if i * 2 < len(var_inputs) else ""
-                                            var_value = var_inputs[i * 2 + 1] if i * 2 + 1 < len(var_inputs) else ""
+                                            var_name = (
+                                                var_inputs[i * 2] if i * 2 < len(var_inputs) else ""
+                                            )
+                                            var_value = (
+                                                var_inputs[i * 2 + 1]
+                                                if i * 2 + 1 < len(var_inputs)
+                                                else ""
+                                            )
                                             if (var_name or "").strip():
-                                                variables[var_name.strip()] = var_value if var_value is not None else ""
-                                    statements_enabled = False
+                                                variables[var_name.strip()] = (
+                                                    var_value if var_value is not None else ""
+                                                )
                                     if not is_advanced and STATEMENTS_VARIABLE in variables:
-                                        statements_enabled = True
                                         variables[STATEMENTS_VARIABLE] = statements_selection
                                     # Call API
                                     data = render_prompt(api_url, prompt_id, variables)
@@ -1526,42 +1675,48 @@ def build_demo() -> gr.Blocks:
                                     error_detail = ""
                                     try:
                                         error_detail = e.response.json().get("detail", str(e))
-                                    except:
+                                    except Exception:
                                         error_detail = str(e)
                                     return "", "", f"⚠️ API error: {error_detail}"
                                 except Exception as e:
                                     return "", "", f"⚠️ Error rendering template: {str(e)}"
-                            
-                            def paste_examples_to_context(examples_text: str, _current_context: str):
+
+                            def paste_examples_to_context(
+                                examples_text: str, _current_context: str
+                            ):
                                 """Override Context with formatted examples under [EXAMPLES] header."""
                                 ex = (examples_text or "").strip()
                                 return ex
-                            
+
                             # Wire up the events
                             # Build outputs list dynamically for prompt_dropdown.change
                             prompt_outputs = [
-                                prompt_description, variables_json, examples_text_hidden,
+                                prompt_description,
+                                variables_json,
+                                examples_text_hidden,
                             ]
                             # Add all variable textbox pairs
                             for i in range(MAX_VARIABLES):
-                                prompt_outputs.extend([var_name_hidden_list[i], var_value_tb_list[i]])
+                                prompt_outputs.extend(
+                                    [var_name_hidden_list[i], var_value_tb_list[i]]
+                                )
                             prompt_outputs.append(statements_selector)
                             prompt_outputs.append(paste_examples_btn)
-                            
+
                             prompt_dropdown.change(
                                 load_prompt_details_and_simple_fields,
                                 inputs=[prompt_dropdown],
                                 outputs=prompt_outputs,
                                 queue=False,
                             )
-                            
+
                             advanced_mode_ckb.change(
                                 toggle_advanced_mode,
                                 inputs=[advanced_mode_ckb],
                                 outputs=[variables_json, simple_mode_group],
                                 queue=False,
                             )
-                            
+
                             # Build inputs list dynamically for render_btn.click
                             render_inputs = [
                                 prompt_dropdown,
@@ -1571,23 +1726,30 @@ def build_demo() -> gr.Blocks:
                             ]
                             # Add all variable name/value pairs
                             for i in range(MAX_VARIABLES):
-                                render_inputs.extend([var_name_hidden_list[i], var_value_tb_list[i]])
+                                render_inputs.extend(
+                                    [var_name_hidden_list[i], var_value_tb_list[i]]
+                                )
                             render_inputs.append(statements_selector)
-                            
+
                             render_btn.click(
                                 render_template_with_modes,
                                 inputs=render_inputs,
                                 outputs=[rendered_output, rendered_json_hidden, render_status],
                                 queue=False,
                             )
-                            
+
                             paste_btn.click(
                                 paste_template_to_input,
                                 inputs=[rendered_json_hidden, prompt_dropdown],
-                                outputs=[system_prompt_box, user_input, response_mode_dd, schema_code],
+                                outputs=[
+                                    system_prompt_box,
+                                    user_input,
+                                    response_mode_dd,
+                                    schema_code,
+                                ],
                                 queue=False,
                             )
-                            
+
                             paste_examples_btn.click(
                                 paste_examples_to_context,
                                 inputs=[examples_text_hidden, context_box],
@@ -1597,24 +1759,27 @@ def build_demo() -> gr.Blocks:
 
                         # --- Tool Calling tab -------------------------------------
                         with gr.Tab("Tool Calling"):
+
                             def get_tools_info():
                                 """Get formatted info about available tools as bullet list."""
                                 try:
                                     tools = get_all_tool_schemas()
                                     if not tools:
                                         return "No tools available."
-                                    
+
                                     tool_items = []
                                     for tool in tools:
                                         func_info = tool.get("function", {})
                                         name = func_info.get("name", "Unknown")
-                                        desc = func_info.get("description", "No description available.")
+                                        desc = func_info.get(
+                                            "description", "No description available."
+                                        )
                                         tool_items.append(f"- **{name}**: {desc}")
-                                    
+
                                     return "\n".join(tool_items)
                                 except Exception as e:
                                     return f"⚠️ Error loading tools: {str(e)}"
-                            
+
                             gr.Markdown(
                                 "### 🛠️ Tool Calling\n"
                                 "Enable the model to call external tools/functions for real-time data and actions:\n\n"
@@ -1622,38 +1787,38 @@ def build_demo() -> gr.Blocks:
                                 "- Tools are supported in both streaming and non-streaming modes.\n"
                                 "- The system prompt is enhanced to instruct the model to use tools when necessary.\n"
                             )
-                            
+
                             enable_tools_ckb = gr.Checkbox(
                                 label="Enable tools",
                                 value=False,
                                 elem_classes=["enhanced-ui-checkbox"],
                             )
-                            
+
                             tool_prompt_override_state = gr.State(value=False)
-                            
+
                             gr.Markdown("#### 🔌 Available tools")
-                            
+
                             # Display available tools with descriptions as bullet list
-                            available_tools_md = gr.Markdown(
+                            gr.Markdown(
                                 value=get_tools_info(),
                             )
-                            
+
                             gr.Markdown(
                                 "ℹ️ **Notes:**\n"
-                                '''
+                                """
                                 - `get_fmp_company_data` supports income and balance sheet data for a limited number of companies. For more details, see [FMP API documentation](https://site.financialmodelingprep.com/developer/docs).
-                                - Gemini does not currently support using tool calling and structured output in the same request. (see [issue](https://github.com/llm-router/llm-router/issues/706)). To avoid errors, the system automatically switches the response format to plain text when Gemini + tools are both enabled. 
+                                - Gemini does not currently support using tool calling and structured output in the same request. (see [issue](https://github.com/llm-router/llm-router/issues/706)). To avoid errors, the system automatically switches the response format to plain text when Gemini + tools are both enabled.
                                 If you need structured output + tools, consider either using OpenAI models or making two calls (tools → text, then text→ structured output).
-                                ''',
+                                """,
                                 elem_classes=["note-style"],
                             )
 
                 with gr.Row():
                     gr.Markdown(
                         value=f"ℹ️ **Note**: Your conversation will expire after {INACTIVITY_TIMEOUT} minutes of inactivity.",
-                            label=None,
-                            elem_classes=["session-info", "note-style"],  # Optional: for custom styling
-                        )
+                        label=None,
+                        elem_classes=["session-info", "note-style"],  # Optional: for custom styling
+                    )
 
         # --- Wiring submissions -----------------------------------------------
         submit_inputs = [
@@ -1692,7 +1857,14 @@ def build_demo() -> gr.Blocks:
         clear_button.click(
             clear_chat_and_metrics,
             inputs=None,
-            outputs=[chatbot, metrics_display, user_input, system_prompt_box, context_box, response_mode_dd],
+            outputs=[
+                chatbot,
+                metrics_display,
+                user_input,
+                system_prompt_box,
+                context_box,
+                response_mode_dd,
+            ],
             queue=False,
         )
 
@@ -1700,7 +1872,14 @@ def build_demo() -> gr.Blocks:
         model_dropdown.change(
             update_params_for_model,
             inputs=[model_dropdown],
-            outputs=[temperature_slider, top_p_slider, max_tokens_slider, seed_text, reasoning_effort_dd, verbosity_dd],
+            outputs=[
+                temperature_slider,
+                top_p_slider,
+                max_tokens_slider,
+                seed_text,
+                reasoning_effort_dd,
+                verbosity_dd,
+            ],
             queue=False,
         )
 
@@ -1712,18 +1891,22 @@ def build_demo() -> gr.Blocks:
         )
 
         # Handle tools checkbox: disable/enable endpoint dropdown, force non-streaming, and set system prompt
-        def on_tools_toggle(enable_tools: bool, current_system_prompt: str, allow_default_prompt: bool = True):
+        def on_tools_toggle(
+            enable_tools: bool, current_system_prompt: str, allow_default_prompt: bool = True
+        ):
             """Handle Enable tools toggle and optionally insert the default tools system prompt."""
             tools_system_prompt = (
                 "You are a helpful assistant with access to tools that can help you provide accurate and up-to-date information. "
                 "When a user asks a question that can be answered using available tools, you should use them to get the most current and accurate information. "
                 "After using tools, summarize the results clearly for the user."
             )
-            
+
             if enable_tools:
                 endpoint_update = gr.update(interactive=True)
                 # Only set system prompt if allowed and it's currently empty
-                if allow_default_prompt and (not current_system_prompt or not current_system_prompt.strip()):
+                if allow_default_prompt and (
+                    not current_system_prompt or not current_system_prompt.strip()
+                ):
                     system_prompt_update = gr.update(value=tools_system_prompt)
                 else:
                     # Don't overwrite existing system prompt
@@ -1742,10 +1925,10 @@ def build_demo() -> gr.Blocks:
                 prompt = get_prompt(api_url, prompt_id)
             except Exception:
                 return gr.update(), gr.update(), gr.update(), False
-            
+
             if not _prompt_requires_tools(prompt):
                 return gr.update(), gr.update(), gr.update(), False
-            
+
             endpoint_update, system_prompt_update = on_tools_toggle(
                 True,
                 current_system_prompt,
@@ -1753,7 +1936,9 @@ def build_demo() -> gr.Blocks:
             )
             return gr.update(value=True), endpoint_update, system_prompt_update, True
 
-        def handle_enable_tools_checkbox(enable_tools: bool, current_system_prompt: str, skip_default_prompt: bool):
+        def handle_enable_tools_checkbox(
+            enable_tools: bool, current_system_prompt: str, skip_default_prompt: bool
+        ):
             """Wrapper that respects one-shot skips for the default tools system prompt."""
             endpoint_update, system_prompt_update = on_tools_toggle(
                 enable_tools,
@@ -1762,18 +1947,23 @@ def build_demo() -> gr.Blocks:
             )
             # Always reset skip flag after applying it
             return endpoint_update, system_prompt_update, False
-        
+
         enable_tools_ckb.change(
             handle_enable_tools_checkbox,
             inputs=[enable_tools_ckb, system_prompt_box, tool_prompt_override_state],
             outputs=[endpoint_dropdown, system_prompt_box, tool_prompt_override_state],
             queue=False,
         )
-        
+
         prompt_dropdown.change(
             sync_tools_with_prompt_selection,
             inputs=[prompt_dropdown, system_prompt_box],
-            outputs=[enable_tools_ckb, endpoint_dropdown, system_prompt_box, tool_prompt_override_state],
+            outputs=[
+                enable_tools_ckb,
+                endpoint_dropdown,
+                system_prompt_box,
+                tool_prompt_override_state,
+            ],
             queue=False,
         )
 
@@ -1795,4 +1985,3 @@ demo = build_demo()
 
 if __name__ == "__main__":
     demo.launch(server_name="0.0.0.0", server_port=7860, share=True)
-

@@ -1,11 +1,11 @@
-from typing import Tuple, Optional, Iterator
-import requests
-import json
+from collections.abc import Iterator
+
 import httpx
 
 
-def sse_pack(data: str, *, event: Optional[str] = None,
-             id: Optional[str] = None, retry: Optional[int] = None) -> bytes:
+def sse_pack(
+    data: str, *, event: str | None = None, id: str | None = None, retry: int | None = None
+) -> bytes:
     """
     Produce a single SSE message frame:
       id: <id>\n
@@ -25,13 +25,14 @@ def sse_pack(data: str, *, event: Optional[str] = None,
         lines.append(f"data: {line}")
     lines.append("")  # blank line to terminate the message
     return ("\n".join(lines) + "\n").encode("utf-8")
-    
+
+
 def sse_data(
     url: str,
-    payload: Optional[dict] = None,
+    payload: dict | None = None,
     method: str = "POST",
-    timeout: Optional[float] = None,
-) -> Iterator[Tuple[Optional[str], str]]:
+    timeout: float | None = None,
+) -> Iterator[tuple[str | None, str]]:
     """
     Minimal SSE client: yields (event_name, data_text) per SSE block.
     """
@@ -62,13 +63,13 @@ def sse_data(
                 event_name = None
                 continue
             if line.startswith(":"):
-                continue                          # comment / keep-alive
+                continue  # comment / keep-alive
             if line.startswith("event:"):
                 event_name = line[6:].lstrip()
                 continue
             if line.startswith("data:"):
                 v = line[5:]
-                if v.startswith(" "): 
+                if v.startswith(" "):
                     v = v[1:]
                 data_buf.append(v)
                 continue

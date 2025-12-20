@@ -253,6 +253,7 @@ services:
       - "127.0.0.1:${UI_PORT}:7860"
     networks:
       - public
+      - internal
     mem_limit: 1G
     mem_reservation: 128M
     cpus: '0.5'

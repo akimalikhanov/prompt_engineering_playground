@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import gradio as gr
 import httpx
@@ -8,11 +8,11 @@ from utils.http import resolve_api_base
 
 
 def _send_feedback_to_backend(
-    trace_id: Optional[str],
+    trace_id: str | None,
     user_feedback: int,
-    api_base_url: Optional[str],
+    api_base_url: str | None,
     default_api_base_url: str,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger | None = None,
 ) -> bool:
     """
     POST feedback to the backend feedback endpoint.
@@ -52,10 +52,10 @@ def _send_feedback_to_backend(
 
 
 def _apply_feedback_to_message(
-    history: List[Dict[str, Any]],
-    index: Optional[int],
-    liked_state: Optional[bool],
-) -> List[Dict[str, Any]]:
+    history: list[dict[str, Any]],
+    index: int | None,
+    liked_state: bool | None,
+) -> list[dict[str, Any]]:
     """
     Apply user_feedback to a specific assistant message (by index) in the chat history.
     This only updates local UI state; backend persistence will be handled separately.
@@ -82,13 +82,13 @@ def _apply_feedback_to_message(
 
 def _on_like_event(
     evt: "gr.LikeData",
-    history: List[Dict[str, Any]],
-    api_base_url: Optional[str],
-    session_state: Optional[Dict[str, Any]],
+    history: list[dict[str, Any]],
+    api_base_url: str | None,
+    session_state: dict[str, Any] | None,
     *,
     default_api_base_url: str,
-    logger: Optional[logging.Logger] = None,
-) -> List[Dict[str, Any]]:
+    logger: logging.Logger | None = None,
+) -> list[dict[str, Any]]:
     """
     Gradio Chatbot.like callback.
     evt.liked:
@@ -110,30 +110,19 @@ def _on_like_event(
     history = _apply_feedback_to_message(history, index, liked_state)
 
     user_feedback = 0
-    if (
-        index is not None
-        and 0 <= index < len(history)
-        and isinstance(history[index], dict)
-    ):
+    if index is not None and 0 <= index < len(history) and isinstance(history[index], dict):
         user_feedback = history[index].get("user_feedback", 0)
 
     # Helper to check if trace_id is valid (not None and not the default "-")
     def _is_valid_trace_id(tid):
         return tid and tid != "-"
-    
+
     # Get trace_id from the exact index only
     trace_id = trace_map.get(index) if trace_map else None
-    trace_lookup_strategy = "exact_index" if _is_valid_trace_id(trace_id) else "not_found"
-    
     # If not found, set to None
     if not _is_valid_trace_id(trace_id):
         trace_id = None
 
-    selected_msg = history[index] if index is not None and 0 <= index < len(history) else {}
-    msg_role = selected_msg.get("role") if isinstance(selected_msg, dict) else None
-    msg_content = str(selected_msg.get("content", "")) if isinstance(selected_msg, dict) else ""
-    is_tool_message = msg_content.startswith("🔧")
-    
     send_ok = _send_feedback_to_backend(
         trace_id,
         user_feedback,
@@ -160,5 +149,3 @@ def _on_like_event(
         },
     )
     return history
-
-

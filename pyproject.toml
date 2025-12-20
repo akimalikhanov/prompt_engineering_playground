@@ -32,6 +32,8 @@ api = [
 ]
 dev = [
     "ipykernel>=7.1.0",
+    "pyright>=1.1.407",
+    "ruff>=0.14.8",
 ]
 providers-api = [
     "google-genai>=1.32.0",
@@ -45,3 +47,60 @@ ui = [
     "gradio==5.47.1",
     "httpx>=0.28.1",
 ]
+
+[tool.ruff]
+# Line length (matches common Python style)
+line-length = 100
+
+# Target Python version
+target-version = "py312"
+
+# Include/exclude patterns
+include = ["*.py"]
+exclude = [
+    ".git",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+    "*.egg-info",
+]
+
+[tool.ruff.lint]
+# Enable specific rule sets
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort (import sorting)
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "ARG", # flake8-unused-arguments
+    "SIM", # flake8-simplify
+]
+
+# Ignore specific rules (add more as needed)
+ignore = [
+    "E501",  # Line too long (handled by formatter)
+    "B008",  # Do not perform function calls in argument defaults
+    "SIM108", 
+]
+
+# Allow autofix for all enabled rules
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.lint.per-file-ignores]
+"api/main.py" = ["E402"]
+
+[tool.ruff.format]
+# Use double quotes
+quote-style = "double"
+# Indent with spaces
+indent-style = "space"
+# Use trailing commas
+skip-magic-trailing-comma = false
+# Line ending style
+line-ending = "auto"

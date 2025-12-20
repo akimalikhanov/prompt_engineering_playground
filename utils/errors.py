@@ -1,6 +1,8 @@
 import json
+from typing import Any
+
 import openai
-from typing import Any, Dict, List, Optional, Tuple
+
 
 class BackendError(Exception):
     def __init__(self, message: str, status_code: int = 400):
@@ -30,13 +32,18 @@ ERROR_MESSAGES = {
 # Minimal transient set for OpenAI-compatible chat APIs
 TRANSIENT_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 
-def _get_status_code(err: Exception) -> Optional[int]:
-    return getattr(err, "status_code", None) or getattr(getattr(err, "response", None), "status_code", None)
+
+def _get_status_code(err: Exception) -> int | None:
+    return getattr(err, "status_code", None) or getattr(
+        getattr(err, "response", None), "status_code", None
+    )
+
 
 def _get_response(err: Exception):
     return getattr(err, "response", None)
 
-def _get_retry_after_seconds(err: Exception) -> Optional[float]:
+
+def _get_retry_after_seconds(err: Exception) -> float | None:
     """Honor Retry-After header if present (seconds or HTTP-date; we only handle seconds)."""
     resp = _get_response(err)
     try:
@@ -50,12 +57,18 @@ def _get_retry_after_seconds(err: Exception) -> Optional[float]:
         pass
     return None
 
+
 def is_network_or_timeout(err: Exception) -> bool:
     return isinstance(err, (openai.APIConnectionError, openai.APITimeoutError))
 
+
 def is_rate_limit(err: Exception) -> bool:
     # Works for OpenAI & most compatibles
-    return isinstance(err, getattr(openai, "RateLimitError", Exception)) or _get_status_code(err) == 429
+    return (
+        isinstance(err, getattr(openai, "RateLimitError", Exception))
+        or _get_status_code(err) == 429
+    )
+
 
 def is_transient_error(err: Exception) -> bool:
     """Classify transient: network/timeout, 429, or known 5xx/edge timeouts."""
@@ -63,6 +76,7 @@ def is_transient_error(err: Exception) -> bool:
         return True
     sc = _get_status_code(err)
     return sc in TRANSIENT_STATUS_CODES
+
 
 def prettify_openai_error(err: Exception) -> str:
     """
@@ -79,6 +93,10 @@ def prettify_openai_error(err: Exception) -> str:
         return "Timeout Error: The API did not respond in time."
     if is_rate_limit(err) and status_code is None:
         status_code = 429
+
+    # Ensure status_code is not None for dictionary lookup
+    if status_code is None:
+        status_code = 500  # Default to 500 if status code is unknown
 
     base_msg = f"{status_code} | " + ERROR_MESSAGES.get(
         status_code, f"Unknown error (status={status_code})"
@@ -125,7 +143,7 @@ def _as_backend_error(exc: Exception) -> BackendError:
     return BackendError(message, status_code)
 
 
-def _stream_error_payload(error: BackendError) -> Dict[str, Any]:
+def _stream_error_payload(error: BackendError) -> dict[str, Any]:
     """Small helper for consistent error payloads in streaming endpoints."""
     return {"status": error.status_code, "error": error.message}
 
@@ -138,7 +156,7 @@ def _stringify_error_value(value: Any) -> str:
                 return str(value[key])
         return json.dumps(value)
     if isinstance(value, list):
-        parts: List[str] = []
+        parts: list[str] = []
         for entry in value:
             if isinstance(entry, dict):
                 loc = entry.get("loc")
@@ -160,7 +178,7 @@ def _stringify_error_value(value: Any) -> str:
     return str(value)
 
 
-def _parse_error_payload(payload: Any) -> Tuple[Optional[int], Optional[str]]:
+def _parse_error_payload(payload: Any) -> tuple[int | None, str | None]:
     """Extract (status, message) from structured error payloads."""
     if isinstance(payload, dict):
         status = payload.get("status") or payload.get("status_code")
@@ -175,7 +193,7 @@ def _parse_error_payload(payload: Any) -> Tuple[Optional[int], Optional[str]]:
     return None, str(payload)
 
 
-def _parse_error_text(raw_text: str) -> Tuple[Optional[int], Optional[str]]:
+def _parse_error_text(raw_text: str) -> tuple[int | None, str | None]:
     """Parse JSON/text error bodies into (status, message)."""
     if not raw_text:
         return None, None
@@ -186,7 +204,7 @@ def _parse_error_text(raw_text: str) -> Tuple[Optional[int], Optional[str]]:
     return _parse_error_payload(payload)
 
 
-def _format_api_error_message(status_code: Optional[int], detail: Optional[str]) -> str:
+def _format_api_error_message(status_code: int | None, detail: str | None) -> str:
     """Consistently format API error strings for UI surfaces."""
     detail_str = (detail or "").strip()
     if status_code:
