@@ -87,10 +87,10 @@ def prettify_openai_error(err: Exception) -> str:
     resp = _get_response(err)
 
     # Handle network/timeout errors (no HTTP response)
-    if isinstance(err, openai.APIConnectionError):
-        return "Network Error: Could not reach the API (connection issue)."
     if isinstance(err, openai.APITimeoutError):
         return "Timeout Error: The API did not respond in time."
+    if isinstance(err, openai.APIConnectionError):
+        return "Network Error: Could not reach the API (connection issue)."
     if is_rate_limit(err) and status_code is None:
         status_code = 429
 

@@ -1,0 +1,148 @@
+repos:
+  # --------------------
+  # Basic hygiene
+  # --------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+
+  # --------------------
+  # Python: lint + format
+  # --------------------
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff (lint)
+        entry: ruff check
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff (format)
+        entry: ruff format
+        language: system
+        types: [python]
+
+  # --------------------
+  # Type checking (fast)
+  # --------------------
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright (typecheck)
+        entry: pyright
+        language: system
+        types: [python]
+        args: ["--level", "error"]
+
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest (unit tests)
+        entry: bash -lc 'pytest -q'
+        language: system
+        pass_filenames: false
+        stages: [manual]
+
+  # --------------------
+  # SAST
+  # --------------------
+  - repo: https://github.com/returntocorp/semgrep
+    rev: v1.89.0
+    hooks:
+      - id: semgrep
+        args: ["--config", "p/security-audit", "--error"]
+
+  # --------------------
+  # Dependency vulnerability scanning
+  # --------------------
+  - repo: local
+    hooks:
+      - id: deps-audit
+        name: deps audit (pip-audit via uv export)
+        language: system
+        entry: bash
+        args:
+          - -lc
+          - |
+            set -euo pipefail
+            command -v uv >/dev/null || exit 1
+            command -v pip-audit >/dev/null || exit 1
+
+            uv export --format requirements-txt --no-dev \
+              --group api \
+              --group providers-api \
+              > /tmp/req-api-prod.txt
+
+            uv export --format requirements-txt --no-dev \
+              --group ui \
+              --group providers-api \
+              > /tmp/req-ui-prod.txt
+
+            pip-audit -r /tmp/req-api-prod.txt
+            pip-audit -r /tmp/req-ui-prod.txt
+        pass_filenames: false
+        stages: [manual]
+
+  # --------------------
+  # Secret scanning
+  # --------------------
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.0
+    hooks:
+      - id: gitleaks
+
+  # --------------------
+  # Container scanning (Dockerfile lint)
+  # --------------------
+  - repo: local
+    hooks:
+      - id: hadolint
+        name: hadolint (Dockerfile lint)
+        language: system
+        entry: bash
+        args:
+          - -lc
+          - |
+            set -euo pipefail
+            command -v hadolint >/dev/null || { echo "hadolint not found"; exit 1; }
+
+            status=0
+
+            for target in "$@"; do
+              echo "hadolint scanning: ${target}"
+              hadolint --failure-threshold error "${target}" || status=1
+            done
+
+            exit "${status}"
+          - hadolint-hook
+        pass_filenames: true
+        files: Dockerfile
+        stages: [manual]
+
+  # --------------------
+  # Container scanning (config scan: Dockerfiles only)
+  # --------------------
+  - repo: local
+    hooks:
+      - id: trivy-config
+        name: trivy (Dockerfiles scan)
+        language: system
+        entry: bash
+        args:
+          - -lc
+          - |
+            set -euo pipefail
+            command -v trivy >/dev/null || { echo "trivy not found"; exit 1; }
+            status=0
+            for target in "$@"; do
+              trivy config --severity HIGH,CRITICAL --exit-code 1 "${target}" || status=1
+            done
+            exit "${status}"
+          - trivy-config-hook
+        pass_filenames: true
+        files: Dockerfile
+        stages: [manual]

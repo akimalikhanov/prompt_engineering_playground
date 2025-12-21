@@ -34,7 +34,7 @@
   "pythonVersion": "3.12",
   "pythonPlatform": "Linux",
   "typeCheckingMode": "basic",
-  
+
   "reportMissingImports": true,
   "reportImportCycles": true,
 
@@ -56,4 +56,3 @@
   "reportUnknownVariableType": "warning",
   "reportUnknownMemberType": "warning"
 }
-

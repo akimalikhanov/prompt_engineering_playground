@@ -802,4 +802,3 @@ ON CONFLICT (key, version) DO NOTHING;
 EOSQL
 
 echo "[init] app data inserted."
-

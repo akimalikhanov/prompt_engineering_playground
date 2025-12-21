@@ -16,6 +16,7 @@ storage/*
 # Mics
 .env
 .gradio
+.ruff_cache
 =0.46.1
 
 openai_api_test.py

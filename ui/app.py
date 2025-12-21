@@ -1134,6 +1134,22 @@ def build_demo() -> gr.Blocks:
                             outputs=[chatbot],
                         )
 
+                    # Model recommendations accordion
+                    with gr.Accordion("Which model to use?", open=False):
+                        gr.Markdown(
+                            "### Recommended (Cloud)\n\n"
+                            "- **GPT-5-mini** — default pick for most tasks (good quality + fast + cost-effective)\n\n"
+                            "- **GPT-5.2** — best quality for complex reasoning, planning, and high-stakes outputs (higher cost)\n\n"
+                            "### Cheap / Fast (Cloud)\n\n"
+                            "- **GPT-5-nano** — ultra-cheap for simple/batch work (extract, classify, short summaries, quick transforms)\n\n"
+                            "- **GPT-4o-mini** — very low cost general model (rewrites, summarization, chat, lightweight tool calls)\n\n"
+                            "- **Gemini 2.5 Flash** — fast free-tier option for quick answers or overflow (rate-limited)\n\n"
+                            "- **Gemini 2.5 Flash Lite** — lightest free fallback for short prompts and low-stakes tasks (more limited)\n\n"
+                            "### Local (No API billing)\n\n"
+                            "- **Llama 3.1 (8B)** — self-hosted for privacy/offline and cost control (quality/latency depend on GPU + load)\n\n"
+                            "- **Qwen 2.5 (7B)** — efficient local general model for internal/low-risk tasks (good instruction following; depends on server load)"
+                        )
+
                     # Tabs for logical grouping
                     with gr.Tabs():
                         # --- Generation tab ------------------------------------

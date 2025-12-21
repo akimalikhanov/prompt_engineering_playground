@@ -3,7 +3,7 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
-import xml.etree.ElementTree as ET
+import xml.etree.ElementTree as ET  # nosemgrep: use-defused-xml
 from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
@@ -82,7 +82,7 @@ def search_arxiv(query: str, max_results: int = 10, start: int = 0) -> list[dict
 
     try:
         # Fetch the XML response
-        with urllib.request.urlopen(url) as response:
+        with urllib.request.urlopen(url) as response:  # nosemgrep: dynamic-urllib-use-detected
             xml_data = response.read().decode("utf-8")
 
         # Parse the XML

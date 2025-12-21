@@ -140,7 +140,7 @@ COT_PROMPT=$(curl -s -X GET "${BASE_URL}/prompts?technique_key=cot" | jq -r '.pr
 
 if [ "$COT_PROMPT" != "null" ] && [ -n "$COT_PROMPT" ]; then
     echo -e "${GREEN}Found CoT prompt: ${COT_PROMPT}${NC}"
-    
+
     echo -e "${YELLOW}Rendering with variables...${NC}"
     curl -s -X POST "${BASE_URL}/prompts/${COT_PROMPT}/render" \
       -H "Content-Type: application/json" \
@@ -158,4 +158,3 @@ echo ""
 echo -e "${GREEN}=================================================="
 echo "All tests completed!"
 echo "==================================================${NC}"
-

@@ -117,4 +117,3 @@ Both APIs share:
 Separate concerns:
 - Main API: Runtime LLM interactions
 - Prompts API: Template management and versioning
-

@@ -32,7 +32,10 @@ api = [
 ]
 dev = [
     "ipykernel>=7.1.0",
+    "pip-audit>=2.10.0",
+    "pre-commit>=4.5.1",
     "pyright>=1.1.407",
+    "pytest>=9.0.2",
     "ruff>=0.14.8",
 ]
 providers-api = [
@@ -85,7 +88,7 @@ select = [
 ignore = [
     "E501",  # Line too long (handled by formatter)
     "B008",  # Do not perform function calls in argument defaults
-    "SIM108", 
+    "SIM108",
 ]
 
 # Allow autofix for all enabled rules
@@ -104,3 +107,23 @@ indent-style = "space"
 skip-magic-trailing-comma = false
 # Line ending style
 line-ending = "auto"
+
+[tool.pytest.ini_options]
+# Test discovery patterns
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+# Add current directory to pythonpath
+pythonpath = ["."]
+# Output options
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--tb=short",
+]
+# Markers
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests",
+]

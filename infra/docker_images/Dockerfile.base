@@ -16,6 +16,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
  && rm -rf /var/lib/apt/lists/*
 
+# Create non-root user (used at runtime in final stages)
+ARG APP_UID=10001
+ARG APP_GID=10001
+RUN groupadd --gid "${APP_GID}" app \
+ && useradd --uid "${APP_UID}" --gid "${APP_GID}" --create-home --shell /usr/sbin/nologin app
+ENV HOME=/home/app \
+    XDG_CACHE_HOME=/home/app/.cache
+
 # Install uv
 RUN pip install --no-cache-dir uv
 
@@ -66,6 +74,11 @@ COPY api/ ./api/
 COPY adapters/ ./adapters/
 COPY models/ ./models/
 
+# Drop privileges for runtime
+RUN mkdir -p "${HOME}" "${XDG_CACHE_HOME}" \
+ && chown -R app:app /app "${HOME}"
+USER app
+
 EXPOSE 8000
 
 # Run with gunicorn (adjust module path if needed)
@@ -90,6 +103,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Copy frontend-specific code
 COPY ui/ ./ui/
+
+# Drop privileges for runtime
+RUN mkdir -p "${HOME}" "${XDG_CACHE_HOME}" \
+ && chown -R app:app /app "${HOME}"
+USER app
 
 EXPOSE 7860
 

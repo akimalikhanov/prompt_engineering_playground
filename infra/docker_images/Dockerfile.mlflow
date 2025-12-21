@@ -14,11 +14,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Create non-root user (runtime)
+ARG APP_UID=10001
+ARG APP_GID=10001
+RUN groupadd --gid "${APP_GID}" app \
+ && useradd --uid "${APP_UID}" --gid "${APP_GID}" --create-home --shell /usr/sbin/nologin app
+ENV HOME=/home/app \
+    XDG_CACHE_HOME=/home/app/.cache
+
 # Pin a recent MLflow 3.x (has Tracing), plus Postgres driver
 RUN pip install --no-cache-dir "mlflow>=3.2,<4.0" psycopg2-binary boto3
+
+# Drop privileges for runtime
+RUN mkdir -p "${HOME}" "${XDG_CACHE_HOME}" \
+ && chown -R app:app /app "${HOME}"
+USER app
 
 # (use this in your FastAPI app, not necessarily on the server container)
 EXPOSE 5000
 
 CMD ["sh","-lc","mlflow --version"]
-

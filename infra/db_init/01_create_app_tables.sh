@@ -47,10 +47,10 @@ CREATE TABLE IF NOT EXISTS app.prompt_examples (
                             response_format IN ('json_object', 'json_schema')
                         ),
     -- NULL = no structured output, 'json_object' = basic JSON mode, 'json_schema' = JSON schema mode (preferred)
-    
+
     -- JSON schema template (only used when response_format='json_schema')
     json_schema_template JSONB,  -- NULL if not using json_schema, JSON schema definition if using json_schema
-    
+
     is_active           BOOLEAN NOT NULL DEFAULT TRUE,
 
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -135,4 +135,3 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT ALL ON FUNCTIONS TO CURRENT_USER;
 EOSQL
 
 echo "[init] app tables created."
-

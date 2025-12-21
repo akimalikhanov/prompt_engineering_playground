@@ -83,7 +83,7 @@ models:
       streaming: true
       tool_calling: true
     params_override: {temperature: 1.0, reasoning_effort: low, max_tokens: 2000}
-    
+
   - id: gpt-4o-mini              # matches your --model_id choices
     label: "OpenAI GPT-4o-mini"
     provider: openai
@@ -103,24 +103,24 @@ models:
       tool_calling: true
     params_override: {}       # keep empty to use defaults
 
-  - id: gpt-o4-mini               # matches your --model_id choices
-    label: "OpenAI GPT o4-mini"
-    provider: openai
-    model_name: "o4-mini"
-    pricing:
-      currency: USD
-      unit: per_1k_tokens
-      input: ${GPT_O4_MINI_INPUT_PRICE:-0.00110}
-      output: ${GPT_O4_MINI_OUTPUT_PRICE:-0.00440}
-      cached_input: null
-      cached_output: null
-      rounding: exact
-      effective: 2025-04-16       # release date
-      notes: "OpenAI list price: $1.10 per 1M input tokens, $4.40 per 1M output tokens. Compact reasoning model with 200k context window."
-    capabilities:
-      streaming: true
-      tool_calling: true
-    params_override: {temperature: 1.0}   # o4-mini only supports temperature=1
+  # - id: gpt-o4-mini               # matches your --model_id choices
+  #   label: "OpenAI GPT o4-mini"
+  #   provider: openai
+  #   model_name: "o4-mini"
+  #   pricing:
+  #     currency: USD
+  #     unit: per_1k_tokens
+  #     input: ${GPT_O4_MINI_INPUT_PRICE:-0.00110}
+  #     output: ${GPT_O4_MINI_OUTPUT_PRICE:-0.00440}
+  #     cached_input: null
+  #     cached_output: null
+  #     rounding: exact
+  #     effective: 2025-04-16       # release date
+  #     notes: "OpenAI list price: $1.10 per 1M input tokens, $4.40 per 1M output tokens. Compact reasoning model with 200k context window."
+  #   capabilities:
+  #     streaming: true
+  #     tool_calling: true
+  #   params_override: {temperature: 1.0}   # o4-mini only supports temperature=1
 
   - id: gemini-flash-lite
     label: "Gemini 2.5 Flash Lite"

@@ -429,6 +429,9 @@ services:
       - GF_SERVER_MAX_REQUEST_SIZE=50MB
       - GF_SERVER_MAX_QUERY_RESULT_SIZE=50MB
       - GRAFANA_PORT=${GRAFANA_PORT:-3000}
+      - APP_DB_USER=${APP_DB_USER}
+      - APP_DB_PASSWORD=${APP_DB_PASSWORD}
+      - APP_DB=${APP_DB}
     volumes:
       - grafana-data:/var/lib/grafana
       - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
@@ -461,7 +464,7 @@ services:
         condition: service_healthy
       prometheus:
         condition: service_healthy
- 
+
   prometheus:
     image: prom/prometheus:v3.7.3
     container_name: prometheus
@@ -534,7 +537,7 @@ services:
         mode: non-blocking
         max-buffer-size: 2m
     healthcheck:
-      test: 
+      test:
         [
         "CMD-SHELL",
         "PGPASSWORD=$$POSTGRES_PASSWORD psql -h $$PGB_APP_DB_HOST -p $$PGB_APP_DB_PORT -U $$POSTGRES_USER -d $$POSTGRES_DB -c 'SELECT 1' >/dev/null"
