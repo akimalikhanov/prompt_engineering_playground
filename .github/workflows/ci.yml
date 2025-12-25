@@ -100,7 +100,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: gitleaks/gitleaks-action@v2
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -137,29 +137,58 @@ jobs:
           exit-code: 1
 
   # --------------------
-  # Build Docker images
+  # Build & Push images to ECR (docker compose)
   # --------------------
-  container-build:
-    name: Build Docker images (api, ui, mlflow)
+  container-ecr-push:
+    name: Build & Push images to ECR (docker compose)
     runs-on: ubuntu-22.04
+    if: github.event_name == 'push' && (github.ref_name == 'main' || github.ref_name == 'master' || github.ref_name == 'dev')
+    needs:
+      - python-quality
+      - test
+      - deps-audit
+      - sast
+      - secrets
+      - container-scan
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      ECR_REGISTRY: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.${{ vars.AWS_REGION }}.amazonaws.com
+
+      # Compose will interpolate these into `image: ...`
+      ECR_REPO_API: ${{ vars.ECR_REPO_API }}
+      ECR_REPO_UI: ${{ vars.ECR_REPO_UI }}
+      ECR_REPO_MLFLOW: ${{ vars.ECR_REPO_MLFLOW }}
+      IMAGE_TAG: ${{ github.sha }}
+
+      # Optional: make builds faster/consistent
+      DOCKER_BUILDKIT: "1"
+      COMPOSE_DOCKER_CLI_BUILD: "1"
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
 
       # Enable modern Docker build (faster + future-proof)
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
 
-      # Build only the services that have "build:"
-      - name: Build images with Docker Compose
-        env:
-          DOCKER_BUILDKIT: "1"
-          COMPOSE_DOCKER_CLI_BUILD: "1"
-        run: |
-          docker compose \
-            -f infra/docker-compose.yml \
-            build api ui mlflow
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@33f92af657bba1882ab79d8621debd2f6769a0c9
+
+      - name: Build images (compose)
+        run: docker compose -f infra/docker-compose-prod.yml build api ui mlflow
+
+      - name: Push images (compose)
+        run: docker compose -f infra/docker-compose-prod.yml push api ui mlflow
 
   # --------------------
   # All checks passed gate
@@ -173,25 +202,32 @@ jobs:
       - sast
       - secrets
       - container-scan
-      - container-build
+      - container-ecr-push
     runs-on: ubuntu-22.04
     if: always()
     steps:
       - name: Check all jobs passed
         run: |
-          results=(
+          # Always-required jobs must be successful.
+          required_results=(
             "${{ needs.python-quality.result }}"
             "${{ needs.test.result }}"
             "${{ needs.deps-audit.result }}"
             "${{ needs.sast.result }}"
             "${{ needs.secrets.result }}"
             "${{ needs.container-scan.result }}"
-            "${{ needs.container-build.result }}"
           )
-          for result in "${results[@]}"; do
+          for result in "${required_results[@]}"; do
             if [[ "$result" != "success" ]]; then
-              echo "One or more jobs failed"
+              echo "One or more required jobs failed"
               exit 1
             fi
           done
+
+          # ECR push is expected to be skipped on PRs.
+          ecr_result="${{ needs.container-ecr-push.result }}"
+          if [[ "$ecr_result" != "success" && "$ecr_result" != "skipped" ]]; then
+            echo "ECR push job failed"
+            exit 1
+          fi
           echo "All CI checks passed!"
