@@ -38,15 +38,6 @@ repos:
         types: [python]
         args: ["--level", "error"]
 
-  - repo: local
-    hooks:
-      - id: pytest
-        name: pytest (unit tests)
-        entry: bash -lc 'pytest -q'
-        language: system
-        pass_filenames: false
-        stages: [manual]
-
   # --------------------
   # SAST
   # --------------------
@@ -145,4 +136,16 @@ repos:
           - trivy-config-hook
         pass_filenames: true
         files: Dockerfile
+        stages: [manual]
+
+  # --------------------
+  # Unit tests
+  # --------------------
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest (unit tests)
+        entry: bash -lc 'pytest -q'
+        language: system
+        pass_filenames: false
         stages: [manual]

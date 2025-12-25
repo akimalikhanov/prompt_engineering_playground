@@ -1,0 +1,186 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, dev]
+  pull_request:
+    branches: [main, master, dev]
+
+jobs:
+  # --------------------
+  # Basic hygiene
+  # --------------------
+  hygiene:
+    name: Basic Hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: >-
+            trailing-whitespace
+            end-of-file-fixer
+            check-yaml
+            check-added-large-files
+            --all-files
+
+  # --------------------
+  # Python: lint + format + typecheck
+  # --------------------
+  python-quality:
+    name: Python Quality (Lint, Format, Types)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-python-uv
+        with:
+          groups: dev api ui providers-api
+
+      - name: Ruff check
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Pyright
+        run: uv run pyright --level error
+
+  # --------------------
+  # Unit tests
+  # --------------------
+  test:
+    name: Pytest (Unit Tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-python-uv
+        with:
+          groups: dev api ui providers-api
+
+      - name: Run tests
+        run: uv run pytest -q
+
+  # --------------------
+  # Dependency vulnerability scanning
+  # --------------------
+  deps-audit:
+    name: Pip Audit (Dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-python-uv
+
+      - name: Install pip-audit
+        run: uv tool install pip-audit
+
+      - name: Audit API dependencies
+        run: |
+          uv export --format requirements-txt --no-dev \
+            --group api --group providers-api \
+            | pip-audit -r /dev/stdin
+
+      - name: Audit UI dependencies
+        run: |
+          uv export --format requirements-txt --no-dev \
+            --group ui --group providers-api \
+            | pip-audit -r /dev/stdin
+
+  # --------------------
+  # SAST (Semgrep)
+  # --------------------
+  sast:
+    name: Semgrep (SAST)
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Semgrep
+        run: semgrep scan --config p/security-audit --error .
+
+  # --------------------
+  # Secret scanning
+  # --------------------
+  secrets:
+    name: Gitleaks (Secrets)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # --------------------
+  # Container scanning (Dockerfile lint + config)
+  # --------------------
+  container-scan:
+    name: Container Scanning (Hadolint + Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Find Dockerfiles
+        id: find-dockerfiles
+        run: |
+          count=$(find . -name "Dockerfile*" -type f | wc -l)
+          echo "count=${count}" >> $GITHUB_OUTPUT
+
+      - name: Hadolint
+        if: steps.find-dockerfiles.outputs.count != '0'
+        run: |
+          find . -name "Dockerfile*" -type f | while read -r dockerfile; do
+            echo "::group::Hadolint: ${dockerfile}"
+            docker run --rm -i hadolint/hadolint < "${dockerfile}"
+            echo "::endgroup::"
+          done
+
+      - name: Trivy config scan
+        uses: aquasecurity/trivy-action@0.30.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: 1
+
+  # --------------------
+  # All checks passed gate
+  # --------------------
+  ci-success:
+    name: CI Success
+    needs:
+      - hygiene
+      - python-quality
+      - test
+      - deps-audit
+      - sast
+      - secrets
+      - container-scan
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check all jobs passed
+        run: |
+          results=(
+            "${{ needs.hygiene.result }}"
+            "${{ needs.python-quality.result }}"
+            "${{ needs.test.result }}"
+            "${{ needs.deps-audit.result }}"
+            "${{ needs.sast.result }}"
+            "${{ needs.secrets.result }}"
+            "${{ needs.container-scan.result }}"
+          )
+          for result in "${results[@]}"; do
+            if [[ "$result" != "success" ]]; then
+              echo "One or more jobs failed"
+              exit 1
+            fi
+          done
+          echo "All CI checks passed!"
