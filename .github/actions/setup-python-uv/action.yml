@@ -1,0 +1,37 @@
+name: Setup Python with uv
+description: Sets up Python and uv with caching
+
+inputs:
+  python-version:
+    description: Python version to install
+    required: false
+    default: "3.12"
+  groups:
+    description: Space-separated dependency groups to sync (e.g., "dev api ui")
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Set up uv
+      uses: astral-sh/setup-uv@681c641aba71e4a1c380be3ab5e12ad51f415867
+      with:
+        version: 0.8.19
+        enable-cache: true
+        cache-dependency-glob: "uv.lock"
+
+    - name: Set up Python
+      shell: bash
+      run: uv python install ${{ inputs.python-version }}
+
+    - name: Install dependencies
+      if: inputs.groups != ''
+      shell: bash
+      run: |
+        groups="${{ inputs.groups }}"
+        group_args=""
+        for group in $groups; do
+          group_args="$group_args --group $group"
+        done
+        uv sync $group_args

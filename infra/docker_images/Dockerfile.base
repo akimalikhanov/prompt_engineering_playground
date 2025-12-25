@@ -25,7 +25,7 @@ ENV HOME=/home/app \
     XDG_CACHE_HOME=/home/app/.cache
 
 # Install uv
-RUN pip install --no-cache-dir uv
+RUN pip install --no-cache-dir uv==0.8.19
 
 # Copy project metadata
 COPY pyproject.toml ./pyproject.toml
