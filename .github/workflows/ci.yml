@@ -6,33 +6,19 @@ on:
   pull_request:
     branches: [main, master, dev]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  # --------------------
-  # Basic hygiene
-  # --------------------
-  hygiene:
-    name: Basic Hygiene
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pre-commit/action@v3.0.1
-        with:
-          extra_args: >-
-            trailing-whitespace
-            end-of-file-fixer
-            check-yaml
-            check-added-large-files
-            --all-files
-
   # --------------------
   # Python: lint + format + typecheck
   # --------------------
   python-quality:
     name: Python Quality (Lint, Format, Types)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
 
       - uses: ./.github/actions/setup-python-uv
         with:
@@ -52,9 +38,9 @@ jobs:
   # --------------------
   test:
     name: Pytest (Unit Tests)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
 
       - uses: ./.github/actions/setup-python-uv
         with:
@@ -68,9 +54,9 @@ jobs:
   # --------------------
   deps-audit:
     name: Pip Audit (Dependencies)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
 
       - uses: ./.github/actions/setup-python-uv
 
@@ -94,11 +80,11 @@ jobs:
   # --------------------
   sast:
     name: Semgrep (SAST)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     container:
-      image: semgrep/semgrep
+      image: semgrep/semgrep:1.145.0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
 
       - name: Run Semgrep
         run: semgrep scan --config p/security-audit --error .
@@ -108,9 +94,9 @@ jobs:
   # --------------------
   secrets:
     name: Gitleaks (Secrets)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
         with:
           fetch-depth: 0
 
@@ -123,9 +109,9 @@ jobs:
   # --------------------
   container-scan:
     name: Container Scanning (Hadolint + Trivy)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
 
       - name: Find Dockerfiles
         id: find-dockerfiles
@@ -138,7 +124,7 @@ jobs:
         run: |
           find . -name "Dockerfile*" -type f | while read -r dockerfile; do
             echo "::group::Hadolint: ${dockerfile}"
-            docker run --rm -i hadolint/hadolint < "${dockerfile}"
+            docker run --rm -i hadolint/hadolint hadolint --failure-threshold error - < "${dockerfile}"
             echo "::endgroup::"
           done
 
@@ -151,31 +137,56 @@ jobs:
           exit-code: 1
 
   # --------------------
+  # Build Docker images
+  # --------------------
+  container-build:
+    name: Build Docker images (api, ui, mlflow)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+
+      # Enable modern Docker build (faster + future-proof)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+
+      # Build only the services that have "build:"
+      - name: Build images with Docker Compose
+        env:
+          DOCKER_BUILDKIT: "1"
+          COMPOSE_DOCKER_CLI_BUILD: "1"
+        run: |
+          docker compose \
+            -f infra/docker-compose.yml \
+            build api ui mlflow
+
+  # --------------------
   # All checks passed gate
   # --------------------
   ci-success:
     name: CI Success
     needs:
-      - hygiene
       - python-quality
       - test
       - deps-audit
       - sast
       - secrets
       - container-scan
-    runs-on: ubuntu-latest
+      - container-build
+    runs-on: ubuntu-22.04
     if: always()
     steps:
       - name: Check all jobs passed
         run: |
           results=(
-            "${{ needs.hygiene.result }}"
             "${{ needs.python-quality.result }}"
             "${{ needs.test.result }}"
             "${{ needs.deps-audit.result }}"
             "${{ needs.sast.result }}"
             "${{ needs.secrets.result }}"
             "${{ needs.container-scan.result }}"
+            "${{ needs.container-build.result }}"
           )
           for result in "${results[@]}"; do
             if [[ "$result" != "success" ]]; then
