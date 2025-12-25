@@ -20,6 +20,10 @@ runs:
         version: 0.8.19
         enable-cache: true
         cache-dependency-glob: "uv.lock"
+        cache-local-path: "~/.cache/uv"
+        prune-cache: false
+        # optional:
+        cache-python: true
 
     - name: Set up Python
       shell: bash
@@ -35,3 +39,9 @@ runs:
           group_args="$group_args --group $group"
         done
         uv sync $group_args
+
+    - name: Debug uv cache size
+      shell: bash
+      run: |
+        echo "UV cache dir: $(uv cache dir)"
+        du -sh "$(uv cache dir)" || true
