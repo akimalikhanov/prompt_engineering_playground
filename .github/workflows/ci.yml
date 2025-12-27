@@ -1,4 +1,4 @@
-name: CI
+name: CI (Tests + Container push to ECR)
 
 on:
   push:

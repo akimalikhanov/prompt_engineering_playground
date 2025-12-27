@@ -1,0 +1,114 @@
+name: CD (Deploy to EC2 via SSM)
+
+on:
+  # push:
+  #   branches: [ "master" ]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Optional override for IMAGE_TAG (defaults to commit SHA)"
+        required: false
+        type: string
+      commit_sha:
+        description: "Optional commit SHA to deploy (defaults to current workflow SHA)"
+        required: false
+        type: string
+      branch:
+        description: "Branch to deploy (defaults to current ref)"
+        required: false
+        type: string
+
+concurrency:
+  group: deploy-ec2
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      # Non-sensitive config from repository variables
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      INSTALL_ROOT: /opt/pep
+      REPO_DIR: /opt/pep/prompt_engineering_playground
+      REPO_URL: https://github.com/${{ github.repository }}.git
+      SSM_BASE_PATH: ${{ vars.SSM_BASE_PATH }}
+      # Deploy parameters
+      BRANCH: ${{ inputs.branch || github.ref_name }}
+      DEPLOY_SHA: ${{ inputs.commit_sha || github.sha }}
+      IMAGE_TAG: ${{ inputs.image_tag || inputs.commit_sha || github.sha }}
+
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_CD_ROLE_TO_ASSUME }}
+
+      - name: Validate required variables
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${AWS_REGION:?Missing variable AWS_REGION}"
+          : "${EC2_INSTANCE_ID:?Missing variable EC2_INSTANCE_ID}"
+          : "${SSM_BASE_PATH:?Missing variable SSM_BASE_PATH}"
+
+      - name: Deploy via SSM
+        id: ssm
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Deploying deploy_sha=$DEPLOY_SHA branch=$BRANCH image_tag=$IMAGE_TAG to instance=$EC2_INSTANCE_ID region=$AWS_REGION"
+
+          # Run everything on the EC2 host via SSM.
+          # Note: SSM commands run as root by default.
+          # 
+          # Simple strategy: wipe and re-clone every deploy.
+          # No git state issues, no conflicts, always clean.
+          # We clone full history (no --depth) so we can checkout any commit for rollback.
+          COMMAND_ID="$(
+            aws ssm send-command \
+              --region "$AWS_REGION" \
+              --instance-ids "$EC2_INSTANCE_ID" \
+              --document-name "AWS-RunShellScript" \
+              --comment "Deploy pep: ${DEPLOY_SHA:0:7}" \
+              --parameters commands="[
+                \"bash -c 'set -euo pipefail; mkdir -p $INSTALL_ROOT; rm -rf $REPO_DIR; git clone $REPO_URL $REPO_DIR; cd $REPO_DIR; git checkout $DEPLOY_SHA; bash ./infra/deploy/ec2_deploy.sh --commit-sha $DEPLOY_SHA --install-root $INSTALL_ROOT --repo-dir $REPO_DIR --region $AWS_REGION --ssm-path $SSM_BASE_PATH --image-tag $IMAGE_TAG'\"
+              ]" \
+              --query "Command.CommandId" \
+              --output text
+          )"
+
+          echo "command_id=$COMMAND_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for SSM command and show output
+        shell: bash
+        run: |
+          set -euo pipefail
+          
+          # Wait for command to complete (success or failure)
+          aws ssm wait command-executed \
+            --region "$AWS_REGION" \
+            --command-id "${{ steps.ssm.outputs.command_id }}" \
+            --instance-id "$EC2_INSTANCE_ID" || true
+          
+          # Always fetch and show output
+          OUT="$(aws ssm get-command-invocation \
+            --region "$AWS_REGION" \
+            --command-id "${{ steps.ssm.outputs.command_id }}" \
+            --instance-id "$EC2_INSTANCE_ID" \
+            --output json)"
+          STATUS="$(echo "$OUT" | jq -r '.Status')"
+          echo "SSM status: $STATUS"
+          echo "---- STDOUT ----"
+          echo "$OUT" | jq -r '.StandardOutputContent'
+          echo "---- STDERR ----"
+          echo "$OUT" | jq -r '.StandardErrorContent'
+          
+          # Fail if not success
+          [[ "$STATUS" == "Success" ]]
+

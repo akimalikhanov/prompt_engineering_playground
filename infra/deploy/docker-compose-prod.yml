@@ -433,6 +433,9 @@ services:
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_MAX_REQUEST_SIZE=50MB
       - GF_SERVER_MAX_QUERY_RESULT_SIZE=50MB
+      - GF_SERVER_DOMAIN=${GRAFANA_PUBLIC_HOST}
+      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s:%(http_port)s/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
       - GRAFANA_PORT=${GRAFANA_PORT:-3000}
       - APP_DB_USER=${APP_DB_USER}
       - APP_DB_PASSWORD=${APP_DB_PASSWORD}
