@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS app.prompt_examples (
     json_schema_template JSONB,  -- NULL if not using json_schema, JSON schema definition if using json_schema
 
     is_active           BOOLEAN NOT NULL DEFAULT TRUE,
-
+    tool_config JSONB,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
 

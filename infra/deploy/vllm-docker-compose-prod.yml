@@ -1,0 +1,45 @@
+name: vllm
+
+services:
+  vllm-qwen:
+    image: vllm/vllm-openai:v0.10.2
+    container_name: vllm-qwen
+    # For vLLM performance; requires Docker host support
+    ipc: host
+    # GPU support (requires NVIDIA Container Toolkit on the host)
+    gpus: all
+    # Bind to all interfaces so another EC2 can reach it over VPC
+    ports:
+      # Must match `port:` in config/vllm_config_qwen.yaml
+      - "8001:8001"
+    volumes:
+      - ../config/vllm_config_qwen.yaml:/config/vllm_config_qwen.yaml:ro
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      HF_TOKEN: ${HF_TOKEN}
+    command: ["--config", "/config/vllm_config_qwen.yaml"]
+    restart: unless-stopped
+
+  vllm-llama:
+    image: vllm/vllm-openai:v0.10.2
+    container_name: vllm-llama
+    ipc: host
+    # GPU support (requires NVIDIA Container Toolkit on the host)
+    gpus: all
+    # Bind to all interfaces so another EC2 can reach it over VPC
+    ports:
+      # Must match `port:` in config/vllm_config_llama.yaml
+      - "8002:8002"
+    volumes:
+      - ../config/vllm_config_llama.yaml:/config/vllm_config_llama.yaml:ro
+      - hf-cache:/root/.cache/huggingface
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      # HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+      HF_TOKEN: ${HF_TOKEN}
+    command: ["--config", "/config/vllm_config_llama.yaml"]
+    restart: unless-stopped
+
+volumes:
+  hf-cache:

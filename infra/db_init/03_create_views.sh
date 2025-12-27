@@ -25,7 +25,8 @@ COMMENT ON VIEW app.v_prompt_examples_latest IS
 
 -- Grant permissions on views
 GRANT SELECT ON app.v_prompt_examples_latest TO CURRENT_USER;
-ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON VIEWS TO CURRENT_USER;
+-- Postgres doesn't support "ON VIEWS" for default privileges; use TABLES (covers tables + views).
+ALTER DEFAULT PRIVILEGES IN SCHEMA app GRANT SELECT ON TABLES TO CURRENT_USER;
 EOSQL
 
 echo "[init] views created."

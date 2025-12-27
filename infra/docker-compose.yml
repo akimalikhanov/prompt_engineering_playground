@@ -123,7 +123,9 @@ services:
       # Tighten Host-header validation (avoid accepting arbitrary hosts)
       # Include both Docker DNS names and local dev access via port-mapped localhost.
       # If you access MLflow via a real DNS name (e.g. mlflow.example.com), add it here.
-      MLFLOW_SERVER_ALLOWED_HOSTS: "mlflow,mlflow:${MLFLOW_PORT},mlflow-server,mlflow-server:${MLFLOW_PORT},localhost,localhost:${MLFLOW_PORT},127.0.0.1,127.0.0.1:${MLFLOW_PORT}"
+      # For EC2 behind nginx, set MLFLOW_PUBLIC_HOST to your public hostname (e.g. ec2-xx-xx-xx-xx.<region>.compute.amazonaws.com).
+      MLFLOW_PUBLIC_HOST: ${MLFLOW_PUBLIC_HOST:-}
+      MLFLOW_SERVER_ALLOWED_HOSTS: "mlflow,mlflow:${MLFLOW_PORT},mlflow-server,mlflow-server:${MLFLOW_PORT},localhost,localhost:${MLFLOW_PORT},127.0.0.1,127.0.0.1:${MLFLOW_PORT},${MLFLOW_PUBLIC_HOST},${MLFLOW_PUBLIC_HOST}:${MLFLOW_PORT}"
     command:
       - sh
       - -lc

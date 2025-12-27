@@ -185,10 +185,10 @@ jobs:
         uses: aws-actions/amazon-ecr-login@33f92af657bba1882ab79d8621debd2f6769a0c9
 
       - name: Build images (compose)
-        run: docker compose -f infra/docker-compose-prod.yml build api ui mlflow
+        run: docker compose -f infra/deploy/docker-compose-prod.yml build api ui mlflow
 
       - name: Push images (compose)
-        run: docker compose -f infra/docker-compose-prod.yml push api ui mlflow
+        run: docker compose -f infra/deploy/docker-compose-prod.yml push api ui mlflow
 
   # --------------------
   # All checks passed gate

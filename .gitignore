@@ -33,3 +33,4 @@ api/main_with_logging.py
 verify_loki.sh
 run_prompts_api.sh
 Dockerfile.based
+infra/shell_scripts/env_to_ssm.sh

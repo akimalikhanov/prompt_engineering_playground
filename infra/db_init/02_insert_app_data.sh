@@ -4,15 +4,6 @@ set -eu
 echo "[init] inserting initial data into app database..."
 
 psql -v ON_ERROR_STOP=1 --username "$APP_DB_USER" --dbname "$APP_DB" <<-'EOSQL'
--- Techniques (idempotent)
-INSERT INTO app.prompt_techniques (key, name, family, url, short_desc) VALUES
-  ('zero-shot',    'Zero-Shot',          'instruction',   'https://www.promptingguide.ai/techniques/zero-shot',     'Solve with instructions only, no examples.'),
-  ('few-shot',     'Few-Shot',           'instruction',   'https://www.promptingguide.ai/techniques/few-shot',      'Show a few labeled examples, then ask the task.'),
-  ('cot',          'Chain-of-Thought',   'reasoning',     'https://www.promptingguide.ai/techniques/cot',           'Think step by step; keep reasoning hidden in final output.'),
-  ('react',        'ReAct',              'reasoning',     'https://www.promptingguide.ai/techniques/react',         'Interleave reasoning with actions (tools), then observe.'),
-  ('least-to-most','Least-to-Most',      'decomposition', 'https://www.promptingguide.ai/techniques/least-to-most', 'Break into subproblems and solve in order.')
-ON CONFLICT (key) DO NOTHING;
-
 -- =========================
 -- ZERO-SHOT TEMPLATES (V1)
 -- =========================

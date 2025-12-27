@@ -1146,7 +1146,7 @@ def build_demo() -> gr.Blocks:
                             "- **Gemini 2.5 Flash** — fast free-tier option for quick answers or overflow (rate-limited)\n\n"
                             "- **Gemini 2.5 Flash Lite** — lightest free fallback for short prompts and low-stakes tasks (more limited)\n\n"
                             "### Local (No API billing)\n\n"
-                            "- **Llama 3.1 (8B)** — self-hosted for privacy/offline and cost control (quality/latency depend on GPU + load)\n\n"
+                            # "- **Llama 3.1 (8B)** — self-hosted for privacy/offline and cost control (quality/latency depend on GPU + load)\n\n"
                             "- **Qwen 2.5 (7B)** — efficient local general model for internal/low-risk tasks (good instruction following; depends on server load)"
                         )
 

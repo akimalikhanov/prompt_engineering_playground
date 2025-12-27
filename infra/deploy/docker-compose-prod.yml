@@ -17,8 +17,8 @@ services:
       APP_DB_USER: ${APP_DB_USER}
       APP_DB_PASSWORD: ${APP_DB_PASSWORD}
     volumes:
-      - ../storage/postgres:/var/lib/postgresql/data
-      - ./db_init:/docker-entrypoint-initdb.d
+      - /opt/pep/data/postgres:/var/lib/postgresql/data
+      - ../db_init:/docker-entrypoint-initdb.d
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     networks:
@@ -49,7 +49,7 @@ services:
       MINIO_API_PORT: ${MINIO_API_PORT:-9000}
     command: server /data --console-address ":9001"
     volumes:
-      - ../storage/minio:/data
+      - /opt/pep/data/minio:/data
     ports:
       - "127.0.0.1:${MINIO_API_PORT:-9000}:9000"   # S3 API
       - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"   # Web Console
@@ -88,7 +88,7 @@ services:
       # Script expects TEMPO_BUCKET; .env.example uses TEMPO_BUCKET_NAME
       TEMPO_BUCKET: ${TEMPO_BUCKET_NAME:-tempo-traces}
     volumes:
-      - ./minio_init:/scripts
+      - ../minio_init:/scripts
     entrypoint: ["/bin/sh", "/scripts/00_minio_init.sh"]
     networks:
       - internal
@@ -97,7 +97,7 @@ services:
   mlflow:
     image: ${ECR_REGISTRY}/${ECR_REPO_MLFLOW}:${IMAGE_TAG}
     build:
-      context: ..
+      context: ../..
       dockerfile: infra/docker_images/Dockerfile.mlflow
     container_name: mlflow-server
     depends_on:
@@ -124,7 +124,9 @@ services:
       # Tighten Host-header validation (avoid accepting arbitrary hosts)
       # Include both Docker DNS names and local dev access via port-mapped localhost.
       # If you access MLflow via a real DNS name (e.g. mlflow.example.com), add it here.
-      MLFLOW_SERVER_ALLOWED_HOSTS: "mlflow,mlflow:${MLFLOW_PORT},mlflow-server,mlflow-server:${MLFLOW_PORT},localhost,localhost:${MLFLOW_PORT},127.0.0.1,127.0.0.1:${MLFLOW_PORT}"
+      # For EC2 behind nginx, set MLFLOW_PUBLIC_HOST to your public hostname (e.g. ec2-xx-xx-xx-xx.<region>.compute.amazonaws.com).
+      MLFLOW_PUBLIC_HOST: ${MLFLOW_PUBLIC_HOST:-}
+      MLFLOW_SERVER_ALLOWED_HOSTS: "mlflow,mlflow:${MLFLOW_PORT},mlflow-server,mlflow-server:${MLFLOW_PORT},localhost,localhost:${MLFLOW_PORT},127.0.0.1,127.0.0.1:${MLFLOW_PORT},${MLFLOW_PUBLIC_HOST},${MLFLOW_PUBLIC_HOST}:${MLFLOW_PORT}"
     command:
       - sh
       - -lc
@@ -159,7 +161,7 @@ services:
   api:
     image: ${ECR_REGISTRY}/${ECR_REPO_API}:${IMAGE_TAG}
     build:
-      context: ..
+      context: ../..
       dockerfile: infra/docker_images/Dockerfile.base
       target: api
     container_name: api-server
@@ -234,7 +236,7 @@ services:
   ui:
     image: ${ECR_REGISTRY}/${ECR_REPO_UI}:${IMAGE_TAG}
     build:
-      context: ..
+      context: ../..
       dockerfile: infra/docker_images/Dockerfile.base
       target: ui
     container_name: ui-server
@@ -278,7 +280,7 @@ services:
     container_name: otel-collector
     command: ["--config=/etc/otelcol/otel-collector.yaml"]
     volumes:
-      - ./monitoring/otel-collector.yaml:/etc/otelcol/otel-collector.yaml:ro
+      - ../monitoring/otel-collector.yaml:/etc/otelcol/otel-collector.yaml:ro
     depends_on:
       - tempo
       - loki
@@ -361,7 +363,7 @@ services:
       # Used by healthcheck (tempo http_listen_port in tempo.yaml)
       TEMPO_HTTP_PORT: ${TEMPO_HTTP_PORT:-3200}
     volumes:
-      - ./monitoring/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - ../monitoring/tempo.yaml:/etc/tempo/tempo.yaml:ro
       - tempo-data:/tmp/tempo    # persistent local storage for WAL
     networks:
       - internal
@@ -402,7 +404,7 @@ services:
         condition: service_completed_successfully
     # user: "0"  # run as root to ensure write access to named volume (see loki-config paths)
     volumes:
-      - ./monitoring/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - ../monitoring/loki-config.yaml:/etc/loki/loki-config.yaml:ro
       - loki-data:/tmp/loki   # named volume for WAL, cache, compactor data (matches loki-config.yaml)
     networks:
       - internal
@@ -437,9 +439,9 @@ services:
       - APP_DB=${APP_DB}
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
-      - ./monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
-      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ../monitoring/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ../monitoring/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ../monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
     ports:
       - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"   # UI → http://localhost:3000
     networks:
@@ -472,7 +474,7 @@ services:
     image: prom/prometheus:v3.7.3
     container_name: prometheus
     volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus   # persistent TSDB storage
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -528,7 +530,7 @@ services:
       PGB_APP_DB_PORT: ${PGB_APP_DB_PORT:-6432}
     entrypoint: ["/bin/sh", "/pgbouncer-entrypoint.sh"]
     volumes:
-      - ./shell_scripts/pgbouncer-entrypoint.sh:/pgbouncer-entrypoint.sh:ro
+      - ../shell_scripts/pgbouncer-entrypoint.sh:/pgbouncer-entrypoint.sh:ro
     networks:
       - internal
     mem_limit: 128M
