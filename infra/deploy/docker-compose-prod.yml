@@ -126,7 +126,7 @@ services:
       # If you access MLflow via a real DNS name (e.g. mlflow.example.com), add it here.
       # For EC2 behind nginx, set MLFLOW_PUBLIC_HOST to your public hostname (e.g. ec2-xx-xx-xx-xx.<region>.compute.amazonaws.com).
       MLFLOW_PUBLIC_HOST: ${MLFLOW_PUBLIC_HOST:-}
-      MLFLOW_SERVER_ALLOWED_HOSTS: "mlflow,mlflow:${MLFLOW_PORT},mlflow-server,mlflow-server:${MLFLOW_PORT},localhost,localhost:${MLFLOW_PORT},127.0.0.1,127.0.0.1:${MLFLOW_PORT},${MLFLOW_PUBLIC_HOST},${MLFLOW_PUBLIC_HOST}:${MLFLOW_PORT}"
+      MLFLOW_SERVER_ALLOWED_HOSTS: "mlflow,mlflow:${MLFLOW_PORT},mlflow-server,mlflow-server:${MLFLOW_PORT},localhost,localhost:${MLFLOW_PORT},127.0.0.1,127.0.0.1:${MLFLOW_PORT},${AWS_PUBLIC_HOST},${AWS_PUBLIC_HOST}:${MLFLOW_PORT}"
     command:
       - sh
       - -lc
@@ -433,7 +433,7 @@ services:
       - GF_USERS_ALLOW_SIGN_UP=false
       - GF_SERVER_MAX_REQUEST_SIZE=50MB
       - GF_SERVER_MAX_QUERY_RESULT_SIZE=50MB
-      - GF_SERVER_DOMAIN=${GRAFANA_PUBLIC_HOST}
+      - GF_SERVER_DOMAIN=${AWS_PUBLIC_HOST}
       - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s:%(http_port)s/grafana/
       - GF_SERVER_SERVE_FROM_SUB_PATH=true
       - GRAFANA_PORT=${GRAFANA_PORT:-3000}

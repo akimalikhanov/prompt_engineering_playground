@@ -1,20 +1,10 @@
 name: CD (Deploy to EC2 via SSM)
 
 on:
-  # push:
-  #   branches: [ "master" ]
   workflow_dispatch:
     inputs:
-      image_tag:
-        description: "Optional override for IMAGE_TAG (defaults to commit SHA)"
-        required: false
-        type: string
-      commit_sha:
-        description: "Optional commit SHA to deploy (defaults to current workflow SHA)"
-        required: false
-        type: string
-      branch:
-        description: "Branch to deploy (defaults to current ref)"
+      deploy_ref:
+        description: "Git SHA (or tag) to deploy. Used for BOTH repo checkout and IMAGE_TAG. Defaults to workflow SHA."
         required: false
         type: string
 
@@ -30,17 +20,16 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      # Non-sensitive config from repository variables
       AWS_REGION: ${{ vars.AWS_REGION }}
       EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+
       INSTALL_ROOT: /opt/pep
       REPO_DIR: /opt/pep/prompt_engineering_playground
       REPO_URL: https://github.com/${{ github.repository }}.git
       SSM_BASE_PATH: ${{ vars.SSM_BASE_PATH }}
-      # Deploy parameters
-      BRANCH: ${{ inputs.branch || github.ref_name }}
-      DEPLOY_SHA: ${{ inputs.commit_sha || github.sha }}
-      IMAGE_TAG: ${{ inputs.image_tag || inputs.commit_sha || github.sha }}
+
+      # Single deploy version:
+      DEPLOY_REF: ${{ inputs.deploy_ref || github.sha }}
 
     steps:
       - name: Configure AWS credentials (OIDC)
@@ -56,59 +45,115 @@ jobs:
           : "${AWS_REGION:?Missing variable AWS_REGION}"
           : "${EC2_INSTANCE_ID:?Missing variable EC2_INSTANCE_ID}"
           : "${SSM_BASE_PATH:?Missing variable SSM_BASE_PATH}"
+          : "${DEPLOY_REF:?Missing DEPLOY_REF}"
 
-      - name: Deploy via SSM
-        id: ssm
+      - name: Deploy via SSM (send + wait + print logs)
         shell: bash
+        timeout-minutes: 15
         run: |
           set -euo pipefail
-          echo "Deploying deploy_sha=$DEPLOY_SHA branch=$BRANCH image_tag=$IMAGE_TAG to instance=$EC2_INSTANCE_ID region=$AWS_REGION"
 
-          # Run everything on the EC2 host via SSM.
-          # Note: SSM commands run as root by default.
-          # 
-          # Simple strategy: wipe and re-clone every deploy.
-          # No git state issues, no conflicts, always clean.
-          # We clone full history (no --depth) so we can checkout any commit for rollback.
+          echo "Deploying DEPLOY_REF=$DEPLOY_REF to instance=$EC2_INSTANCE_ID region=$AWS_REGION"
+
+          REMOTE_SCRIPT="$(cat <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          INSTALL_ROOT="${INSTALL_ROOT}"
+          REPO_DIR="${REPO_DIR}"
+          REPO_URL="${REPO_URL}"
+          AWS_REGION="${AWS_REGION}"
+          SSM_BASE_PATH="${SSM_BASE_PATH}"
+          DEPLOY_REF="${DEPLOY_REF}"
+
+          echo "[remote] install_root=\$INSTALL_ROOT"
+          echo "[remote] repo_dir=\$REPO_DIR"
+          echo "[remote] deploy_ref=\$DEPLOY_REF"
+
+          command -v git >/dev/null
+          command -v docker >/dev/null
+          command -v aws >/dev/null
+
+          mkdir -p "\$INSTALL_ROOT"
+
+          # Safety guard for rm -rf
+          if [[ -z "\$REPO_DIR" || "\$REPO_DIR" == "/" || "\$REPO_DIR" == "/opt" || "\$REPO_DIR" == "/opt/pep" ]]; then
+            echo "Refusing to rm -rf unsafe REPO_DIR='\$REPO_DIR'" >&2
+            exit 2
+          fi
+
+          rm -rf "\$REPO_DIR"
+          mkdir -p "\$REPO_DIR"
+          cd "\$REPO_DIR"
+
+          # Fetch EXACT ref (SHA or tag). Keep it simple + reliable.
+          git init -q
+          git remote add origin "\$REPO_URL"
+          git fetch -q --tags origin "\$DEPLOY_REF"
+          git checkout -q --detach FETCH_HEAD
+
+          # Use the SAME ref for image tag + commit verification
+          INSTALL_ROOT="\$INSTALL_ROOT" \
+          REPO_DIR="\$REPO_DIR" \
+          AWS_REGION="\$AWS_REGION" \
+          SSM_BASE_PATH="\$SSM_BASE_PATH" \
+          DEPLOY_REF="\$DEPLOY_REF" \
+            bash ./infra/deploy/ec2_deploy.sh \
+              --deploy-ref "\$DEPLOY_REF" \
+              --install-root "\$INSTALL_ROOT" \
+              --repo-dir "\$REPO_DIR" \
+              --region "\$AWS_REGION" \
+              --ssm-path "\$SSM_BASE_PATH"
+          EOF
+          )"
+
+          REMOTE_B64="$(printf '%s' "$REMOTE_SCRIPT" | base64 -w0)"
+          RUN_CMD="echo '$REMOTE_B64' | base64 -d > /tmp/pep_deploy.sh && chmod +x /tmp/pep_deploy.sh && /tmp/pep_deploy.sh"
+
+          PARAMS="$(jq -n --arg cmd "$RUN_CMD" '{commands: [$cmd]}')"
+
           COMMAND_ID="$(
             aws ssm send-command \
               --region "$AWS_REGION" \
               --instance-ids "$EC2_INSTANCE_ID" \
               --document-name "AWS-RunShellScript" \
-              --comment "Deploy pep: ${DEPLOY_SHA:0:7}" \
-              --parameters commands="[
-                \"bash -c 'set -euo pipefail; mkdir -p $INSTALL_ROOT; rm -rf $REPO_DIR; git clone $REPO_URL $REPO_DIR; cd $REPO_DIR; git checkout $DEPLOY_SHA; bash ./infra/deploy/ec2_deploy.sh --commit-sha $DEPLOY_SHA --install-root $INSTALL_ROOT --repo-dir $REPO_DIR --region $AWS_REGION --ssm-path $SSM_BASE_PATH --image-tag $IMAGE_TAG'\"
-              ]" \
+              --comment "Deploy pep: ${DEPLOY_REF:0:12}" \
+              --parameters "$PARAMS" \
               --query "Command.CommandId" \
               --output text
           )"
 
-          echo "command_id=$COMMAND_ID" >> "$GITHUB_OUTPUT"
+          echo "SSM command_id=$COMMAND_ID"
 
-      - name: Wait for SSM command and show output
-        shell: bash
-        run: |
-          set -euo pipefail
-          
-          # Wait for command to complete (success or failure)
-          aws ssm wait command-executed \
-            --region "$AWS_REGION" \
-            --command-id "${{ steps.ssm.outputs.command_id }}" \
-            --instance-id "$EC2_INSTANCE_ID" || true
-          
-          # Always fetch and show output
+          echo "Waiting for SSM command to complete..."
+
+          for i in {1..90}; do
+            STATUS="$(aws ssm get-command-invocation \
+              --region "$AWS_REGION" \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$EC2_INSTANCE_ID" \
+              --query 'Status' \
+              --output text 2>/dev/null || echo "Pending")"
+
+            if [[ "$STATUS" != "InProgress" && "$STATUS" != "Pending" ]]; then
+              break
+            fi
+
+            echo "  [$i/90] Status: $STATUS"
+            sleep 10
+          done
+
           OUT="$(aws ssm get-command-invocation \
             --region "$AWS_REGION" \
-            --command-id "${{ steps.ssm.outputs.command_id }}" \
+            --command-id "$COMMAND_ID" \
             --instance-id "$EC2_INSTANCE_ID" \
             --output json)"
+
           STATUS="$(echo "$OUT" | jq -r '.Status')"
           echo "SSM status: $STATUS"
           echo "---- STDOUT ----"
           echo "$OUT" | jq -r '.StandardOutputContent'
           echo "---- STDERR ----"
           echo "$OUT" | jq -r '.StandardErrorContent'
-          
-          # Fail if not success
-          [[ "$STATUS" == "Success" ]]
 
+          [[ "$STATUS" == "Success" ]]
