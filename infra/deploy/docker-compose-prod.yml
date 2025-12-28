@@ -47,6 +47,10 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       # Used by healthcheck (MinIO always listens on 9000 inside container)
       MINIO_API_PORT: ${MINIO_API_PORT:-9000}
+      # Serve Console behind nginx under /minio/
+      # IMPORTANT: redirect URL must end with a trailing slash, otherwise the Console can go blank after login.
+      MINIO_CONSOLE_SUBPATH: /minio/
+      MINIO_BROWSER_REDIRECT_URL: http://${AWS_PUBLIC_HOST:-localhost}/minio/
     command: server /data --console-address ":9001"
     volumes:
       - /opt/pep/data/minio:/data
@@ -142,7 +146,7 @@ services:
     networks:
       - public
       - internal
-    mem_limit: 2.5G
+    mem_limit: 2G
     mem_reservation: 512M
     cpus: '1.0'
     logging:
@@ -286,7 +290,7 @@ services:
       - loki
     networks:
       - internal
-    mem_limit: 512M
+    mem_limit: 256M
     mem_reservation: 128M
     cpus: '0.5'
     logging:
@@ -367,7 +371,7 @@ services:
       - tempo-data:/tmp/tempo    # persistent local storage for WAL
     networks:
       - internal
-    mem_limit: 2G
+    mem_limit: 1.5G
     mem_reservation: 512M
     cpus: '1.0'
     logging:
@@ -408,7 +412,7 @@ services:
       - loki-data:/tmp/loki   # named volume for WAL, cache, compactor data (matches loki-config.yaml)
     networks:
       - internal
-    mem_limit: 1G
+    mem_limit: 512M
     mem_reservation: 256M
     cpus: '1.0'
     logging:
@@ -450,7 +454,7 @@ services:
     networks:
       - public
       - internal
-    mem_limit: 768M
+    mem_limit: 512M
     mem_reservation: 192M
     cpus: '0.5'
     logging:
@@ -487,7 +491,7 @@ services:
       PROMETHEUS_PORT: ${PROMETHEUS_PORT:-9090}
     networks:
       - internal
-    mem_limit: 2G
+    mem_limit: 1G
     mem_reservation: 512M
     cpus: '1.0'
     logging:
