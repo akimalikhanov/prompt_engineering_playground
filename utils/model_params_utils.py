@@ -44,6 +44,11 @@ def _get_model_special_behavior(model_id: str) -> dict[str, Any]:
             "interactive": False,
             "label": "Temperature (fixed at 1 for this model)",
         }
+        special_behaviors["top_p"] = {
+            "value": 1.0,
+            "interactive": False,
+            "label": "Top-p (fixed at 1 for this model)",
+        }
 
     return special_behaviors
 
@@ -82,7 +87,15 @@ def _get_param_values_for_model(
     }
 
     # Top-p
-    params["top_p"] = {"value": effective.get("top_p", defaults.get("top_p"))}
+    top_p_value = effective.get("top_p", defaults.get("top_p"))
+    top_p_special = special_behaviors.get("top_p", {})
+    if "value" in top_p_special:
+        top_p_value = top_p_special["value"]
+    params["top_p"] = {
+        "value": top_p_value,
+        "interactive": top_p_special.get("interactive", True),
+        "label": top_p_special.get("label", "Top-p"),
+    }
 
     # Max tokens
     max_tokens_value = effective.get("max_tokens", defaults.get("max_tokens"))

@@ -13,7 +13,7 @@ services:
       # Must match `port:` in config/vllm_config_qwen.yaml
       - "8001:8001"
     volumes:
-      - ../config/vllm_config_qwen.yaml:/config/vllm_config_qwen.yaml:ro
+      - ${REPO_DIR}/config/vllm_config_qwen.yaml:/config/vllm_config_qwen.yaml:ro
       - hf-cache:/root/.cache/huggingface
     environment:
       HF_HOME: /root/.cache/huggingface
@@ -32,7 +32,7 @@ services:
       # Must match `port:` in config/vllm_config_llama.yaml
       - "8002:8002"
     volumes:
-      - ../config/vllm_config_llama.yaml:/config/vllm_config_llama.yaml:ro
+      - ${REPO_DIR}/config/vllm_config_llama.yaml:/config/vllm_config_llama.yaml:ro
       - hf-cache:/root/.cache/huggingface
     environment:
       HF_HOME: /root/.cache/huggingface

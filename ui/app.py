@@ -856,7 +856,7 @@ def update_params_for_model(model_choice: Any):
 
     return (
         gr.update(**params["temperature"]),
-        gr.update(value=params["top_p"]["value"]),
+        gr.update(**params["top_p"]),
         gr.update(value=params["max_tokens"]["value"]),
         gr.update(value=params["seed"]["value"]),
         gr.update(
@@ -1146,7 +1146,7 @@ def build_demo() -> gr.Blocks:
                             "- **Gemini 2.5 Flash** — fast free-tier option for quick answers or overflow (rate-limited)\n\n"
                             "- **Gemini 2.5 Flash Lite** — lightest free fallback for short prompts and low-stakes tasks (more limited)\n\n"
                             "### Local (No API billing)\n\n"
-                            # "- **Llama 3.1 (8B)** — self-hosted for privacy/offline and cost control (quality/latency depend on GPU + load)\n\n"
+                            "- **Llama 3.1 (8B)** — self-hosted for privacy/offline and cost control (quality/latency depend on GPU + load)\n\n"
                             "- **Qwen 2.5 (7B)** — efficient local general model for internal/low-risk tasks (good instruction following; depends on server load)"
                         )
 
@@ -1173,11 +1173,12 @@ def build_demo() -> gr.Blocks:
                                 )
 
                                 top_p_slider = gr.Slider(
-                                    label="Top-p",
+                                    label=initial_params["top_p"]["label"],
                                     minimum=0.0,
                                     maximum=1.0,
                                     step=0.01,
                                     value=initial_params["top_p"]["value"],
+                                    interactive=initial_params["top_p"]["interactive"],
                                 )
                             with gr.Row():
                                 max_tokens_slider = gr.Slider(

@@ -1,0 +1,172 @@
+name: CD (Deploy vLLM to GPU EC2 via SSM)
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_ref:
+        description: "Git SHA (or tag) to deploy. Defaults to workflow SHA."
+        required: false
+        type: string
+      models:
+        description: "Comma-separated list of models to deploy (qwen, llama). Default: qwen"
+        required: false
+        type: string
+        default: "qwen"
+
+concurrency:
+  group: deploy-ec2-gpu
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      EC2_GPU_INSTANCE_ID: ${{ vars.EC2_GPU_INSTANCE_ID }}
+
+      INSTALL_ROOT: /opt/vllm
+      REPO_URL: https://github.com/${{ github.repository }}.git
+      SSM_HF_TOKEN_PATH: ${{ vars.SSM_HF_TOKEN_PATH }}
+
+      DEPLOY_REF: ${{ inputs.deploy_ref || github.sha }}
+      MODELS: ${{ inputs.models || 'qwen' }}
+
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ secrets.AWS_CD_ROLE_TO_ASSUME }}
+
+      - name: Validate required variables
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${AWS_REGION:?Missing variable AWS_REGION}"
+          : "${EC2_GPU_INSTANCE_ID:?Missing variable EC2_GPU_INSTANCE_ID}"
+          : "${SSM_HF_TOKEN_PATH:?Missing variable SSM_HF_TOKEN_PATH}"
+          : "${DEPLOY_REF:?Missing DEPLOY_REF}"
+          : "${MODELS:?Missing MODELS}"
+
+      - name: Deploy via SSM (send + wait + print logs)
+        shell: bash
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+
+          echo "Deploying vLLM DEPLOY_REF=$DEPLOY_REF MODELS=$MODELS to instance=$EC2_GPU_INSTANCE_ID region=$AWS_REGION"
+
+          REMOTE_SCRIPT="$(cat <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          INSTALL_ROOT="${INSTALL_ROOT}"
+          REPO_URL="${REPO_URL}"
+          AWS_REGION="${AWS_REGION}"
+          SSM_HF_TOKEN_PATH="${SSM_HF_TOKEN_PATH}"
+          DEPLOY_REF="${DEPLOY_REF}"
+          MODELS="${MODELS}"
+
+          echo "[remote] install_root=\$INSTALL_ROOT"
+          echo "[remote] deploy_ref=\$DEPLOY_REF"
+          echo "[remote] models=\$MODELS"
+
+          command -v git >/dev/null || { echo "git not found"; exit 1; }
+          command -v docker >/dev/null || { echo "docker not found"; exit 1; }
+          command -v aws >/dev/null || { echo "aws not found"; exit 1; }
+
+          mkdir -p "\$INSTALL_ROOT"
+          cd "\$INSTALL_ROOT"
+
+          # Sparse checkout: only fetch the files we need
+          if [[ -d ".git" ]]; then
+            rm -rf .git
+          fi
+
+          git init -q
+          git remote add origin "\$REPO_URL" 2>/dev/null || git remote set-url origin "\$REPO_URL"
+          git config core.sparseCheckout true
+
+          # Write sparse-checkout patterns (config/vllm* matches all vllm config files)
+          mkdir -p .git/info
+          cat > .git/info/sparse-checkout <<'SPARSE'
+          infra/deploy/vllm-docker-compose-prod.yml
+          infra/deploy/ec2-gpu-deploy.sh
+          config/vllm*
+          SPARSE
+
+          git fetch -q --depth 1 origin "\$DEPLOY_REF"
+          git checkout -q FETCH_HEAD
+
+          echo "[remote] Files fetched:"
+          find . -type f ! -path './.git/*' | head -20
+
+          chmod +x infra/deploy/ec2-gpu-deploy.sh
+
+          # Run deploy script
+          INSTALL_ROOT="\$INSTALL_ROOT" \
+          AWS_REGION="\$AWS_REGION" \
+          SSM_HF_TOKEN_PATH="\$SSM_HF_TOKEN_PATH" \
+          MODELS="\$MODELS" \
+            bash ./infra/deploy/ec2-gpu-deploy.sh \
+              --install-root "\$INSTALL_ROOT" \
+              --region "\$AWS_REGION" \
+              --ssm-hf-token-path "\$SSM_HF_TOKEN_PATH" \
+              --models "\$MODELS"
+          EOF
+          )"
+
+          REMOTE_B64="$(printf '%s' "$REMOTE_SCRIPT" | base64 -w0)"
+          RUN_CMD="echo '$REMOTE_B64' | base64 -d > /tmp/pep_gpu_deploy.sh && chmod +x /tmp/pep_gpu_deploy.sh && /tmp/pep_gpu_deploy.sh"
+
+          PARAMS="$(jq -n --arg cmd "$RUN_CMD" '{commands: [$cmd]}')"
+
+          COMMAND_ID="$(
+            aws ssm send-command \
+              --region "$AWS_REGION" \
+              --instance-ids "$EC2_GPU_INSTANCE_ID" \
+              --document-name "AWS-RunShellScript" \
+              --comment "Deploy vLLM: ${DEPLOY_REF:0:12} models: $MODELS" \
+              --parameters "$PARAMS" \
+              --query "Command.CommandId" \
+              --output text
+          )"
+
+          echo "SSM command_id=$COMMAND_ID"
+
+          echo "Waiting for SSM command to complete..."
+
+          for i in {1..120}; do
+            STATUS="$(aws ssm get-command-invocation \
+              --region "$AWS_REGION" \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$EC2_GPU_INSTANCE_ID" \
+              --query 'Status' \
+              --output text 2>/dev/null || echo "Pending")"
+
+            if [[ "$STATUS" != "InProgress" && "$STATUS" != "Pending" ]]; then
+              break
+            fi
+
+            echo "  [$i/150] Status: $STATUS"
+            sleep 20
+          done
+
+          OUT="$(aws ssm get-command-invocation \
+            --region "$AWS_REGION" \
+            --command-id "$COMMAND_ID" \
+            --instance-id "$EC2_GPU_INSTANCE_ID" \
+            --output json)"
+
+          STATUS="$(echo "$OUT" | jq -r '.Status')"
+          echo "SSM status: $STATUS"
+          echo "---- STDOUT ----"
+          echo "$OUT" | jq -r '.StandardOutputContent'
+          echo "---- STDERR ----"
+          echo "$OUT" | jq -r '.StandardErrorContent'
+
+          [[ "$STATUS" == "Success" ]]

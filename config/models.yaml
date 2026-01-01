@@ -167,23 +167,23 @@ models:
   #   params_override: {max_tokens: 2000}
 
   # === Local vLLM adapters ===
-  # - id: llama
-  #   label: "Llama3.1-8B-Instruct-AWQ"
-  #   provider: vllm
-  #   model_path: "hugging-quants/Meta-Llama-3.1-8B-Instruct-AWQ-INT4"  # your local HF path or name
-  #   server:
-  #     host: "${LLAMA_SERVER_HOST}"
-  #     port: "${LLAMA_SERVER_PORT:-8002}"           # was vllm_dict['llama']['port']
-  #     base_path: "/v1"                          # router will format http://host:port/base_path
-  #   pricing:
-  #     currency: USD
-  #     unit: local            # indicates no per-token pricing
-  #     cost: 0.0              # treated as free in cost dashboards
-  #     notes: "Running on self-hosted GPU with vLLM. No API billing."
-  #   capabilities:
-  #     streaming: true
-  #     tool_calling: true
-  #   params_override: {}
+  - id: llama
+    label: "Llama3.1-8B-Instruct-AWQ"
+    provider: vllm
+    model_path: "hugging-quants/Meta-Llama-3.1-8B-Instruct-AWQ-INT4"  # your local HF path or name
+    server:
+      host: "${LLAMA_SERVER_HOST}"
+      port: "${LLAMA_SERVER_PORT:-8002}"           # was vllm_dict['llama']['port']
+      base_path: "/v1"                          # router will format http://host:port/base_path
+    pricing:
+      currency: USD
+      unit: local            # indicates no per-token pricing
+      cost: 0.0              # treated as free in cost dashboards
+      notes: "Running on self-hosted GPU with vLLM. No API billing."
+    capabilities:
+      streaming: true
+      tool_calling: true
+    params_override: {}
 
   - id: qwen
     label: "Qwen2.5-7B-Instruct-AWQ "
