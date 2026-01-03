@@ -34,3 +34,4 @@ verify_loki.sh
 run_prompts_api.sh
 Dockerfile.based
 infra/shell_scripts/env_to_ssm.sh
+.cursor/

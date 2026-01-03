@@ -84,7 +84,13 @@ log "Starting minio"
 log "Waiting for postgres to become healthy"
 pg_state=""
 for i in {1..60}; do
-  pg_state="$(docker inspect -f '{{.State.Health.Status}}' mlflow-postgres 2>/dev/null || echo 'unknown')"
+  # Resolve the container ID via compose so this works regardless of container_name
+  pg_cid="$("${DC[@]}" ps -q postgres 2>/dev/null || true)"
+  if [ -n "${pg_cid:-}" ]; then
+    pg_state="$(docker inspect -f '{{.State.Health.Status}}' "$pg_cid" 2>/dev/null || echo 'unknown')"
+  else
+    pg_state="unknown"
+  fi
   if [ "$pg_state" = "healthy" ]; then
     log "✅ Postgres is healthy"
     break

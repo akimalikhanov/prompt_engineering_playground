@@ -96,7 +96,7 @@ SERVICES=()
 for model in "${MODEL_ARRAY[@]}"; do
   model="$(echo "$model" | tr -d '[:space:]')"
   config_file="$INSTALL_ROOT/config/vllm_config_${model}.yaml"
-  
+
   if [[ -f "$config_file" ]]; then
     SERVICES+=("vllm-${model}")
     log "   -> Will deploy: vllm-${model} (config: vllm_config_${model}.yaml)"
